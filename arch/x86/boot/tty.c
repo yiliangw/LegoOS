@@ -5,7 +5,7 @@
 #include "boot.h"
 #include <asm/processor-flags.h>
 
-int early_serial_base;
+// int early_serial_base;
 
 #define XMTRDY          0x20
 
