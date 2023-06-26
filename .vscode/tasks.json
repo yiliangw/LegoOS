@@ -1,0 +1,30 @@
+{
+    "tasks": [
+        {
+            "label": "build LegoOS",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "-j$(nproc)"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            }
+        },
+        {
+            "label": "start Qemu",
+            "type": "shell",
+            "isBackground": true,
+            "problemMatcher": "$tsc-watch",
+            "command": "./scripts/debug_qemu.sh",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": [
+                "build LegoOS"
+            ],
+
+        }
+    ],
+    "version": "2.0.0"
+}
