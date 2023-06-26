@@ -325,7 +325,7 @@ asmlinkage void __init start_kernel(void)
 	 */
 	smp_prepare_cpus(setup_max_cpus);
 	local_irq_enable();
-	smp_init();
+	// smp_init();
 
 	/*
 	 * For Lego, system is not fully running
