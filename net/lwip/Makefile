@@ -1,4 +1,1 @@
-obj-y := api/
-obj-y += core/
-obj-y += lego/
-obj-y += netif/
+obj-$(CONFIG_LWIP) := api/ core/ lego/ netif/
