@@ -967,16 +967,4 @@ int pci_enable_msix_range(struct pci_dev *dev, struct msix_entry *entries,
 
 
 
-
-
-
-
-
-#ifdef CONFIG_E1000
-int pci_func_attach_E1000(struct pci_dev *f);
-
-int pci_transmit_packet(const void * src,size_t n);
-int pci_receive_packet(void * dst);
-#endif
-
 #endif /* _LEGO_PCI_H_ */

@@ -4,6 +4,29 @@ menuconfig E1000
 	tristate "e1000 driver"
 	---help---
 	  Driver for Intel E1000.
+	depends on LWIP
+
+	if E1000
+		menu "Network interface"
+			config E1000_NETIF_MAC
+				string "MAC address"
+				default "52:54:00:12:34:56" if COMP_PROCESSOR
+				default "52:54:00:12:34:57" if COMP_MEMORY
+				default "52:54:00:12:34:58"
+			config E1000_NETIF_IP
+				string "IP address"
+				default	"10.0.2.15" if COMP_PROCESSOR
+				default "10.0.2.16" if COMP_MEMORY
+				default "10.0.2.17"
+			config E1000_NETIF_MASK
+				string "Subnet mask"
+				default "255.255.255.0"
+			config E1000_NETIF_GATEWAY
+				string "Gateway IP"
+				default "10.0.2.2"
+		endmenu
+	endif
+	
 
 menuconfig TG3
 	tristate "tg3 driver"
