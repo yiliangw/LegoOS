@@ -1,1 +1,1 @@
-obj-y := 
+obj-y := sys_arch.o thread.o

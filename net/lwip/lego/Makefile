@@ -1,3 +1,3 @@
 #obj-y := arch/sys_arch.o arch/thread.o arch/perror.o
 obj-y := jif/
-obj-y += arch/
+# obj-y += arch/
