@@ -5,6 +5,11 @@ config LWIP
 	---help---
 	  lwip TCP/IP layer.
 
+config LWIP_FIT
+	bool "lwIP FIT implementation"
+	default y
+	depends on LWIP
+
 if INFINIBAND
 
 config FIT

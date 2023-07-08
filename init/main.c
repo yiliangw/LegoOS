@@ -55,6 +55,8 @@
 #include <asm/setup.h>
 #include <asm/fpu/internal.h>
 
+#include <net/lwip/init.h>
+
 enum system_states system_state __read_mostly;
 
 /* Screen information used by kernel */
@@ -134,10 +136,14 @@ static int kernel_init(void *unused)
 	 * Then we initialize all the devices (IB, Ethernet etc)
 	 */
 	pci_subsys_init();
+#ifdef CONFIG_LWIP
+	lwip_init();
+#endif
 	device_init();
 	dump_irq_domain_list();
 
 #if defined(CONFIG_INFINIBAND) && defined(CONFIG_FIT)
+#ifndef CONFIG_LWIP_FIT
 	init_socket();
 	kthread_run(lego_ib_init, NULL, "ib-initd");
 
@@ -145,8 +151,8 @@ static int kernel_init(void *unused)
 	wait_for_completion(&ib_init_done);
 
 	test_socket();
+#endif /* CONFIG_LWIP_FIT */
 #endif
-
 	/* Final step towards a running component.. */
 	manager_init();
 

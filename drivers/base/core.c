@@ -11,7 +11,7 @@
 #include <lego/device.h>
 #include <lego/kernel.h>
 
-void __init ib_core_init(void);
+
 
 /*
  * This is called after PCI init.
@@ -19,7 +19,17 @@ void __init ib_core_init(void);
  */
 void __init device_init(void)
 {
+#ifdef CONFIG_E1000
+	void __init e1000_init(void);
+	e1000_init();
+#endif
+#ifdef CONFIG_INFINIBAND
+#ifndef CONFIG_LWIP_FIT
+	void __init ib_core_init(void);
 	ib_core_init();
+#endif
+#endif
+
 }
 
 static int __dev_printk(const char *level, const struct device *dev,
