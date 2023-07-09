@@ -235,7 +235,7 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -Wno-format-security \
 		   -Werror=uninitialized \
 		   -Werror=maybe-uninitialized \
-		   -std=gnu89
+		   -std=gnu89 --no-pic
 
 KBUILD_AFLAGS	:= -D__ASSEMBLY__
 
