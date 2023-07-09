@@ -1,21 +1,71 @@
+#include "asm/types.h"
 #include <net/e1000.h>
 #include <lego/pci.h>
+#include <lego/types.h>
 //#include <lego/pmap.h>
 #include <lego/string.h>
 #include <lego/mm.h>
 #include <net/netif/etharp.h>
 #include <asm/io.h>
 
-struct tx_desc txDescArr[NUM_TX_DESC] __attribute__ ((aligned (PAGE_SIZE)))  =  {{0, 0, 0, 0, 0, 0, 0}};
-struct rx_desc rxDescArr[NUM_RX_DESC] __attribute__ ((aligned (PAGE_SIZE)))  =  {{0, 0, 0, 0, 0, 0}};
+#define E1000_TXDMAC   0x03000  /* TX DMA Control - RW */
+#define E1000_KABGTXD  0x03004  /* AFE Band Gap Transmit Ref Data */
+#define E1000_TDFH     0x03410  /* TX Data FIFO Head - RW */
+#define E1000_TDFT     0x03418  /* TX Data FIFO Tail - RW */
+#define E1000_TDFHS    0x03420  /* TX Data FIFO Head Saved - RW */
+#define E1000_TDFTS    0x03428  /* TX Data FIFO Tail Saved - RW */
+#define E1000_TDFPC    0x03430  /* TX Data FIFO Packet Count - RW */
+#define E1000_TDBAL    0x03800  /* TX Descriptor Base Address Low - RW */
+#define E1000_TDBAH    0x03804  /* TX Descriptor Base Address High - RW */
+#define E1000_TDLEN    0x03808  /* TX Descriptor Length - RW */
+#define E1000_TDH      0x03810  /* TX Descriptor Head - RW */
+#define E1000_TDT      0x03818  /* TX Descripotr Tail - RW */
+#define E1000_TIDV     0x03820  /* TX Interrupt Delay Value - RW */
+#define E1000_TXDCTL   0x03828  /* TX Descriptor Control - RW */
+#define E1000_TADV     0x0382C  /* TX Interrupt Absolute Delay Val - RW */
+#define E1000_TSPMT    0x03830  /* TCP Segmentation PAD & Min Threshold - RW */
+#define E1000_TARC0    0x03840  /* TX Arbitration Count (0) */
+#define E1000_TDBAL1   0x03900  /* TX Desc Base Address Low (1) - RW */
+#define E1000_TDBAH1   0x03904  /* TX Desc Base Address High (1) - RW */
+#define E1000_TDLEN1   0x03908  /* TX Desc Length (1) - RW */
+#define E1000_TDH1     0x03910  /* TX Desc Head (1) - RW */
+#define E1000_TDT1     0x03918  /* TX Desc Tail (1) - RW */
+#define E1000_TXDCTL1  0x03928  /* TX Descriptor Control (1) - RW */
+#define E1000_TARC1    0x03940  /* TX Arbitration Count (1) */
+#define E1000_TXD_BUFFER_LENGTH 0x5EE
+#define E1000_RXD_BUFFER_LENGTH 0x5EE
+#define NUM_TX_DESC 64
+#define NUM_RX_DESC 128
 
-int tx_desc_head = 0;
-int tx_desc_tail = 0;
-int rx_desc_head = 0;
-int rx_desc_tail = 0;
-volatile u32 *map_region;
+struct tx_desc {
+	u64 addr;
+	u16 length;
+	u8 cso;
+	u8 cmd;
+	u8 status;
+	u8 css;
+	u16 special;
+};
 
-void initializeTxDescriptors(void)
+struct rx_desc {
+	u64 addr;
+	u16 length;
+	u16 chcksum;
+	u8 status;
+	u8 errors;
+	u16 special;
+};
+
+static struct tx_desc txDescArr[NUM_TX_DESC] __attribute__ ((aligned (PAGE_SIZE)))  =  {{0, 0, 0, 0, 0, 0, 0}};
+static struct rx_desc rxDescArr[NUM_RX_DESC] __attribute__ ((aligned (PAGE_SIZE)))  =  {{0, 0, 0, 0, 0, 0}};
+
+static int tx_desc_head = 0;
+static int tx_desc_tail = 0;
+static int rx_desc_head = 0;
+static int rx_desc_tail = 0;
+static volatile u32 *map_region;
+
+static void initializeTxDescriptors(void)
 {
 	int i;
 	struct page* page;
@@ -28,7 +78,7 @@ void initializeTxDescriptors(void)
 	}
 }
 
-void initializeRxDescriptors(void)
+static void initializeRxDescriptors(void)
 {
 	int i;
 	struct page* page;
@@ -41,13 +91,14 @@ void initializeRxDescriptors(void)
 	}
 }
 
-int pci_transmit_packet(const void * src,size_t n){ //Need to check for more parameters
+int e1000_transmit(const void *src, u16 len)
+{ //Need to check for more parameters
 	void * va;
 
 	pr_debug("Inside pci_transmit_packet %d\n", tx_desc_tail);
-	pr_debug("String %s size %d\n",src, n);
+	pr_debug("String %s size %d\n",src, len);
 
-	if(n > E1000_TXD_BUFFER_LENGTH){
+	if(len > E1000_TXD_BUFFER_LENGTH){
 		pr_debug("This should not fail\n");
 		return -1;
 	}
@@ -59,10 +110,10 @@ int pci_transmit_packet(const void * src,size_t n){ //Need to check for more par
 	}
 
 	va = __va(txDescArr[tx_desc_tail].addr);
-	memmove(va, src, n);
+	memmove(va, src, len);
 
 	//set packet length
-	txDescArr[tx_desc_tail].length = n;
+	txDescArr[tx_desc_tail].length = len;
 	//txDescArr[tx_desc_tail].length = n+14;  //taking ethernet header in consideration 
 						//but script is failing with this
 	//Reset the status as not free
@@ -76,7 +127,8 @@ int pci_transmit_packet(const void * src,size_t n){ //Need to check for more par
 	return 0;
 }
 
-int pci_receive_packet(void * dst){ //Need to check for more parameters
+int e1000_receive(void *dst, u16 *len)
+{ //Need to check for more parameters
 	const void * va;
 	int n = 0;
 
