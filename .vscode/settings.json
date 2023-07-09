@@ -1,0 +1,9 @@
+{
+    "clangd.arguments": [
+        "--compile-commands-dir=${workspaceFolder}",
+        "--background-index",
+        "--completion-style=detailed",
+        "-log=info"
+    ],
+    "C_Cpp.intelliSenseEngine": "disabled"
+}
