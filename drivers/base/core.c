@@ -11,6 +11,8 @@
 #include <lego/device.h>
 #include <lego/kernel.h>
 
+#include <net/e1000.h> 
+
 void __init ib_core_init(void);
 
 /*
@@ -20,6 +22,9 @@ void __init ib_core_init(void);
 void __init device_init(void)
 {
 	ib_core_init();
+#ifdef CONFIG_E1000
+	e1000_init();
+#endif
 }
 
 static int __dev_printk(const char *level, const struct device *dev,

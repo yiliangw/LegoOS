@@ -5,6 +5,17 @@ menuconfig E1000
 	---help---
 	  Driver for Intel E1000.
 
+	if E1000
+		menu "Network interface"
+			config E1000_NETIF_MAC
+				string "MAC address"
+				default "52:54:00:12:34:56" if COMP_PROCESSOR
+				default "52:54:00:12:34:57" if COMP_MEMORY
+				default "52:54:00:12:34:58"
+		endmenu
+	endif
+
+
 menuconfig TG3
 	tristate "tg3 driver"
 	---help---

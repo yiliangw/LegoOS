@@ -1,12 +1,14 @@
-#include "asm/types.h"
-#include <net/e1000.h>
+#include <lego/kernel.h>
+#include <lego/printk.h>
 #include <lego/pci.h>
 #include <lego/types.h>
-//#include <lego/pmap.h>
-#include <lego/string.h>
+#include <lego/irq.h>
+#include <lego/irqdesc.h>
 #include <lego/mm.h>
-#include <net/netif/etharp.h>
+
 #include <asm/io.h>
+#include <net/netif/etharp.h>
+#include <net/e1000.h>
 
 #define E1000_TXDMAC   0x03000  /* TX DMA Control - RW */
 #define E1000_KABGTXD  0x03004  /* AFE Band Gap Transmit Ref Data */
@@ -37,6 +39,12 @@
 #define NUM_TX_DESC 64
 #define NUM_RX_DESC 128
 
+#define E1000_RA       0x05400  /* Receive Address - RW Array */
+
+#define E1000_RAH_AV            0x80000000		/* Receive descriptor valid */
+
+#define E1000_LOCATE(offset)	(offset >> 2)
+
 struct tx_desc {
 	u64 addr;
 	u16 length;
@@ -65,30 +73,75 @@ static int rx_desc_head = 0;
 static int rx_desc_tail = 0;
 static volatile u32 *map_region;
 
-static void initializeTxDescriptors(void)
-{
-	int i;
-	struct page* page;
-	for (i = 0; i < NUM_TX_DESC; i++){
-		page = alloc_page();
-		txDescArr[i].addr = page_to_phys(page);
-		txDescArr[i].cmd = 0x09;
-		txDescArr[i].length = E1000_TXD_BUFFER_LENGTH;
-		txDescArr[i].status = 0x1;
-	}
-}
+static struct netif e1000_netif;
+static char rxbuf[PAGE_SIZE];
 
-static void initializeRxDescriptors(void)
+void (*e1000_input)(const void *src, u16 len) = NULL;
+
+#define INTEL_E1000_ETHERNET_DEVICE(device_id) {\
+	PCI_DEVICE(PCI_VENDOR_ID_INTEL, device_id)}
+static DEFINE_PCI_DEVICE_TABLE(e1000_pci_tbl) = {
+	INTEL_E1000_ETHERNET_DEVICE(0x1000),
+	INTEL_E1000_ETHERNET_DEVICE(0x1001),
+	INTEL_E1000_ETHERNET_DEVICE(0x1004),
+	INTEL_E1000_ETHERNET_DEVICE(0x1008),
+	INTEL_E1000_ETHERNET_DEVICE(0x1009),
+	INTEL_E1000_ETHERNET_DEVICE(0x100C),
+	INTEL_E1000_ETHERNET_DEVICE(0x100D),
+	INTEL_E1000_ETHERNET_DEVICE(0x100E),
+	INTEL_E1000_ETHERNET_DEVICE(0x100F),
+	INTEL_E1000_ETHERNET_DEVICE(0x1010),
+	INTEL_E1000_ETHERNET_DEVICE(0x1011),
+	INTEL_E1000_ETHERNET_DEVICE(0x1012),
+	INTEL_E1000_ETHERNET_DEVICE(0x1013),
+	INTEL_E1000_ETHERNET_DEVICE(0x1014),
+	INTEL_E1000_ETHERNET_DEVICE(0x1015),
+	INTEL_E1000_ETHERNET_DEVICE(0x1016),
+	INTEL_E1000_ETHERNET_DEVICE(0x1017),
+	INTEL_E1000_ETHERNET_DEVICE(0x1018),
+	INTEL_E1000_ETHERNET_DEVICE(0x1019),
+	INTEL_E1000_ETHERNET_DEVICE(0x101A),
+	INTEL_E1000_ETHERNET_DEVICE(0x101D),
+	INTEL_E1000_ETHERNET_DEVICE(0x101E),
+	INTEL_E1000_ETHERNET_DEVICE(0x1026),
+	INTEL_E1000_ETHERNET_DEVICE(0x1027),
+	INTEL_E1000_ETHERNET_DEVICE(0x1028),
+	INTEL_E1000_ETHERNET_DEVICE(0x1075),
+	INTEL_E1000_ETHERNET_DEVICE(0x1076),
+	INTEL_E1000_ETHERNET_DEVICE(0x1077),
+	INTEL_E1000_ETHERNET_DEVICE(0x1078),
+	INTEL_E1000_ETHERNET_DEVICE(0x1079),
+	INTEL_E1000_ETHERNET_DEVICE(0x107A),
+	INTEL_E1000_ETHERNET_DEVICE(0x107B),
+	INTEL_E1000_ETHERNET_DEVICE(0x107C),
+	INTEL_E1000_ETHERNET_DEVICE(0x108A),
+	INTEL_E1000_ETHERNET_DEVICE(0x1099),
+	INTEL_E1000_ETHERNET_DEVICE(0x10B5),
+	INTEL_E1000_ETHERNET_DEVICE(0x2E6E),
+	/* required last entry */
+	{0,}
+};
+
+static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent);
+static void e1000_remove(struct pci_dev *pdev);
+static struct pci_driver e1000_driver = {
+	.name		= "e1000",
+	.id_table	= e1000_pci_tbl,
+	.probe		= e1000_probe,
+	.remove		= e1000_remove,
+};
+
+int __init e1000_init(void)
 {
-	int i;
-	struct page* page;
-	for (i = 0; i < NUM_RX_DESC; i++){
-		page = alloc_page();
-		rxDescArr[i].addr = page_to_phys(page);
-		//no cmd to give
-		//length will get set by hardware based on incoming packet size
-		//status set deafult as 0 so no need to update here
+	int ret;
+
+	ret = pci_register_driver(&e1000_driver);
+	if (ret) {
+		pr_err("e1000: pci_register_driver failed %d\n", ret);
+		return ret;
 	}
+
+	return 0;
 }
 
 int e1000_transmit(const void *src, u16 len)
@@ -158,15 +211,125 @@ int e1000_receive(void *dst, u16 *len)
 	pr_debug("receiving packet rx_desc_tail %d\n", rx_desc_tail);
 
 	//return length of packet
-	return n;
+	return 0;
 }
 
-int pci_func_attach_E1000(struct pci_dev *f)
+static void initializeTxDescriptors(void)
 {
-	pci_func_enable(f);
-	pr_debug("pci_func_attach_E1000 f %p\n", f);
-	map_region = (u32 *)ioremap_nocache(f->reg_base[0] ,(size_t)f->reg_size[0]);
-	pr_debug("Device status reg is %x\n",map_region[2]);
+	int i;
+	struct page* page;
+	for (i = 0; i < NUM_TX_DESC; i++){
+		page = alloc_page();
+		txDescArr[i].addr = page_to_phys(page);
+		txDescArr[i].cmd = 0x09;
+		txDescArr[i].length = E1000_TXD_BUFFER_LENGTH;
+		txDescArr[i].status = 0x1;
+	}
+}
+
+static void initializeRxDescriptors(void)
+{
+	int i;
+	struct page* page;
+	for (i = 0; i < NUM_RX_DESC; i++){
+		page = alloc_page();
+		rxDescArr[i].addr = page_to_phys(page);
+		//no cmd to give
+		//length will get set by hardware based on incoming packet size
+		//status set deafult as 0 so no need to update here
+	}
+}
+
+static irqreturn_t e1000_intr_handler(int irq, void *data)
+{
+	struct pci_dev *pdev;
+	int ret;
+	u16 len;
+
+	pdev = (struct pci_dev *) data;
+	if (irq != pdev->irq)
+		return IRQ_NONE;
+
+	ret = e1000_receive(rxbuf, &len);
+	if (ret) {
+		pr_err("e1000: Fail to receive packet\n");
+	} else {
+		pr_info("e1000: Receive %u bytes\n", len);
+		if (e1000_input)
+			e1000_input(rxbuf, len);
+	}
+	
+	return IRQ_HANDLED;
+}
+
+static int e1000_request_irq(struct pci_dev *pdev)
+{
+	irq_handler_t handler = e1000_intr_handler;
+	int irq_flags = IRQF_SHARED;
+	int err;
+
+	err = request_irq(pdev->irq, handler, irq_flags, pci_name(pdev), pdev);
+
+	return err;
+}
+
+static int e1000_set_mac(void)
+{
+#if ETHARP_HWADDR_LEN != 6
+#error ETHARP_HWADDR_LEN must be 6 for ethernet
+#endif
+	u32 mac[6] = {};
+	u32 low, high;
+	int i, ret;
+
+	ret = sscanf(CONFIG_E1000_NETIF_MAC, "%x:%x:%x:%x:%x:%x",
+		&mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
+	if (ret != 6) {
+		pr_err("e1000: Fail to get mac from CONFIG_E1000_NETIF_MAC: %s\n", CONFIG_E1000_NETIF_MAC);
+		return -1;
+	}
+
+	low = high = 0;
+	for (i = 0; i < 4; i++)
+		low |= (mac[i] << (i * 8));
+	for (i = 4; i < 6; i++)
+		high |= (mac[i] << ((i - 4) * 8));
+
+	map_region[E1000_LOCATE(E1000_RA)] = low;
+	map_region[E1000_LOCATE(E1000_RA) + 1] = high | E1000_RAH_AV;
+
+	pr_info("e1000: Set mac address to %02x:%02x:%02x:%02x:%02x:%02x\n",
+		mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+	return 0;
+}
+
+static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
+{
+	int err;
+	uint8_t mac[6];
+
+	err = pci_enable_device(pdev);
+	if (err) {
+		pr_err("e1000: pci_enable_device: %d\n", err);
+		return err;
+	}
+
+	err = pci_request_regions(pdev, "e1000");
+	if (err) {
+		pr_err("e1000: pci_request_regions: %d\n", err);
+		return err;
+	}
+
+	err = e1000_request_irq(pdev);
+	if (err) {
+		pr_err("e1000: request_irq: %d\n", err);
+		return err;
+	}
+
+	pr_debug("e1000: pdev %p\n", pdev);
+	map_region = (u32 *)ioremap_nocache(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
+	pr_debug("e1000: Device status reg is %x\n",map_region[2]);
 
 	/*Sending intialize start*/
 	map_region[0x3810 >> 2] = 0x0; //TDH set to 0b
@@ -190,19 +353,19 @@ int pci_func_attach_E1000(struct pci_dev *f)
 
 	map_region[0x5400 >> 2] = 0x12005452;
 	map_region[0x5404 >> 2] = 0x5634 | 0x80000000;
-		
-	//Setting mac address    
-	//uint8_t mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56}; //from testoutput.c
-	//memmove((void*)&map_region[0x5400 >> 2], mac,  ETHARP_HWADDR_LEN);	//RAL and RAH
 
-	//pr_debug("hex 1 %x vs 0x12005452\n",map_region[0x5400]);
-	//pr_debug("hex 2 %x vs 0x5634\n",map_region[0x5404]);
-	/*Receiving intialize end*/
+	err = e1000_set_mac();
+	if (err)
+		return err;
 
 	initializeTxDescriptors();
 	initializeRxDescriptors();
 
-	pr_debug("Initialized E1000 device\n");
+	pr_debug("e1000: Initialized\n");
 	return 0;
+}
+
+static void e1000_remove(struct pci_dev *pdev)
+{
 }
 
