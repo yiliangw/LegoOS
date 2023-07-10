@@ -35,8 +35,15 @@ static inline int socket_file_open(struct file *filp)
 }
 #endif /* CONFIG_SOCKET_SYSCALL */
 
+#ifdef CONFIG_ETHERNET_FIT
+extern struct completion eth_init_done;
+int lego_eth_init(void *unused);
+#endif /* CONFIG_ETHERNET_FIT */ 
+
 #ifdef CONFIG_INFINIBAND
+#ifdef CONFIG_INFINIBAND_FIT
 extern struct completion ib_init_done;
+#endif /* CONFIG_INFINIBAND_FIT */
 extern int mad_got_one;
 
 int ib_mad_init(void);

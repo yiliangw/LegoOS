@@ -108,7 +108,7 @@ static err_t low_level_output(struct netif *netif, struct pbuf *p)
 
 	pci_transmit_packet(txbuf, txsize);
 	#endif
-	pci_transmit_packet(p->payload, p->len);
+	// pci_transmit_packet(p->payload, p->len);
 
 	//ipc_send(jif->envid, NSREQ_OUTPUT, (void *)pkt, PTE_P|PTE_W|PTE_U);
 	//sys_page_unmap(0, (void *)pkt);

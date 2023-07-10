@@ -21,7 +21,9 @@ void __init ib_core_init(void);
  */
 void __init device_init(void)
 {
+#ifdef CONFIG_INFINIBAND
 	ib_core_init();
+#endif
 #ifdef CONFIG_E1000
 	e1000_init();
 #endif

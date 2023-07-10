@@ -137,7 +137,10 @@ static int kernel_init(void *unused)
 	device_init();
 	dump_irq_domain_list();
 
-#if defined(CONFIG_INFINIBAND) && defined(CONFIG_FIT)
+#if defined(CONFIG_ETHERNET_FIT)
+	kthread_run(lego_eth_init, NULL, "eth-initd");
+	wait_for_completion(&eth_init_done);
+#elif defined(CONFIG_INFINIBAND_FIT)
 	init_socket();
 	kthread_run(lego_ib_init, NULL, "ib-initd");
 

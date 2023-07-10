@@ -2,14 +2,25 @@ menu "Networking"
 
 config LWIP
 	tristate "lwip TCP/IP layer"
+	default y
 	---help---
 	  lwip TCP/IP layer.
 
-if INFINIBAND
-
 config FIT
-	bool "FIT IB layer"
+	bool "FIT layer"
 	default y
+	depends on INFINIBAND || E1000
+
+if FIT
+
+config ETHERNET_FIT
+	bool "Ethernet FIT implementation"
+	default y
+	depends on E1000 && LWIP
+
+config INFINIBAND_FIT
+	bool "Infiniband FIT implementation"
+	default n
 	depends on INFINIBAND
 
 config FIT_FIRST_QPN
@@ -215,6 +226,6 @@ config DEBUG_POLL
 	help
 	  Turn on to show poll debugging msgs
 
-endif # INFINIBAND
+endif # FIT
 
 endmenu # Networking

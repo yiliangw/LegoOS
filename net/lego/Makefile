@@ -1,4 +1,3 @@
-obj-$(CONFIG_FIT) := fit_ibapi.o fit_internal.o fit_machine.o
+obj-$(CONFIG_ETHERNET_FIT) 		+= fit_ethapi/
+obj-$(CONFIG_INFINIBAND_FIT) 	+= fit_ibapi/	
 
-CFLAGS_fit_ibapi.o = -Wno-format
-CFLAGS_fit_internal.o = -Wno-format
