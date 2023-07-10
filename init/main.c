@@ -55,6 +55,8 @@
 #include <asm/setup.h>
 #include <asm/fpu/internal.h>
 
+#include <net/lwip/init.h>
+
 enum system_states system_state __read_mostly;
 
 /* Screen information used by kernel */
@@ -136,10 +138,16 @@ static int kernel_init(void *unused)
 	pci_subsys_init();
 	device_init();
 	dump_irq_domain_list();
-
+#if defined(CONFIG_LWIP)
+	lwip_init();
+#endif
 #if defined(CONFIG_ETHERNET_FIT)
 	kthread_run(lego_eth_init, NULL, "eth-initd");
+
+	/* wait until eth finished initialization */
 	wait_for_completion(&eth_init_done);
+	pr_info("eth_init_done\n");
+	for(;;);
 #elif defined(CONFIG_INFINIBAND_FIT)
 	init_socket();
 	kthread_run(lego_ib_init, NULL, "ib-initd");

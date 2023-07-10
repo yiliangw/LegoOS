@@ -1,3 +1,4 @@
+#include <lego/errno.h>
 #include <lego/kernel.h>
 #include <lego/printk.h>
 #include <lego/pci.h>
@@ -73,10 +74,8 @@ static int rx_desc_head = 0;
 static int rx_desc_tail = 0;
 static volatile u32 *map_region;
 
-static struct netif e1000_netif;
-static char rxbuf[PAGE_SIZE];
-
-void (*e1000_input)(const void *src, u16 len) = NULL;
+void (*e1000_input_callback)(void) = NULL;
+u8 e1000_mac[ETHARP_HWADDR_LEN];
 
 #define INTEL_E1000_ETHERNET_DEVICE(device_id) {\
 	PCI_DEVICE(PCI_VENDOR_ID_INTEL, device_id)}
@@ -148,18 +147,17 @@ int e1000_transmit(const void *src, u16 len)
 { //Need to check for more parameters
 	void * va;
 
-	pr_debug("Inside pci_transmit_packet %d\n", tx_desc_tail);
-	pr_debug("String %s size %d\n",src, len);
+	pr_debug("e1000: Transmitting packet (len = %u)\n", len);
 
 	if(len > E1000_TXD_BUFFER_LENGTH){
 		pr_debug("This should not fail\n");
-		return -1;
+		return -EINVAL;
 	}
 
 	/*check if free descriptors are available*/
 	if(!(txDescArr[tx_desc_tail].status & 0x1)){
 		pr_debug("Tx Desc is not free [%d] and [%d]\n",txDescArr[tx_desc_tail].status, tx_desc_tail);
-		return -1;
+		return -ENOMEM;
 	}
 
 	va = __va(txDescArr[tx_desc_tail].addr);
@@ -183,7 +181,6 @@ int e1000_transmit(const void *src, u16 len)
 int e1000_receive(void *dst, u16 *len)
 { //Need to check for more parameters
 	const void * va;
-	int n = 0;
 
 	//pr_debug("Inside pci_receive_packet %d\n", rx_desc_tail);
 	rx_desc_tail = (rx_desc_tail + 1) % NUM_RX_DESC;
@@ -195,10 +192,10 @@ int e1000_receive(void *dst, u16 *len)
 		return -1;
 	}
 
-	n = rxDescArr[rx_desc_tail].length;
+	*len = rxDescArr[rx_desc_tail].length;
 
 	va = __va(rxDescArr[rx_desc_tail].addr);
-	memmove(dst, va, n);
+	memmove(dst, va, *len);
 
 	//Reset the status as free descriptor
 	rxDescArr[rx_desc_tail].status &= ~0x03;
@@ -243,22 +240,14 @@ static void initializeRxDescriptors(void)
 static irqreturn_t e1000_intr_handler(int irq, void *data)
 {
 	struct pci_dev *pdev;
-	int ret;
-	u16 len;
 
 	pdev = (struct pci_dev *) data;
 	if (irq != pdev->irq)
 		return IRQ_NONE;
 
-	ret = e1000_receive(rxbuf, &len);
-	if (ret) {
-		pr_err("e1000: Fail to receive packet\n");
-	} else {
-		pr_info("e1000: Receive %u bytes\n", len);
-		if (e1000_input)
-			e1000_input(rxbuf, len);
-	}
-	
+	if (e1000_input_callback)
+		e1000_input_callback();
+
 	return IRQ_HANDLED;
 }
 
@@ -290,10 +279,14 @@ static int e1000_set_mac(void)
 	}
 
 	low = high = 0;
-	for (i = 0; i < 4; i++)
+	for (i = 0; i < 4; i++) {
 		low |= (mac[i] << (i * 8));
-	for (i = 4; i < 6; i++)
+		e1000_mac[i] = mac[i];
+	}
+	for (i = 4; i < 6; i++) {
 		high |= (mac[i] << ((i - 4) * 8));
+		e1000_mac[i] = mac[i];
+	}
 
 	map_region[E1000_LOCATE(E1000_RA)] = low;
 	map_region[E1000_LOCATE(E1000_RA) + 1] = high | E1000_RAH_AV;

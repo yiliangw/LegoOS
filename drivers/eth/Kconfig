@@ -12,6 +12,17 @@ menuconfig E1000
 				default "52:54:00:12:34:56" if COMP_PROCESSOR
 				default "52:54:00:12:34:57" if COMP_MEMORY
 				default "52:54:00:12:34:58"
+			config E1000_NETIF_IP
+				string "IP address"
+				default	"10.0.2.15" if COMP_PROCESSOR
+				default "10.0.2.16" if COMP_MEMORY
+				default "10.0.2.17"
+			config E1000_NETIF_MASK
+				string "Subnet mask"
+				default "255.255.255.0"
+			config E1000_NETIF_GATEWAY
+				string "Gateway IP"
+				default "10.0.2.2"
 		endmenu
 	endif
 

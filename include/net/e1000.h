@@ -4,8 +4,10 @@
 #ifdef CONFIG_E1000
 
 #include <lego/types.h>
+#include <net/netif/etharp.h>
 
-extern void (*e1000_input)(const void *src, u16 len);
+extern void (*e1000_input_callback)(void);
+extern u8 e1000_mac[ETHARP_HWADDR_LEN];
 
 int __init e1000_init(void);
 
