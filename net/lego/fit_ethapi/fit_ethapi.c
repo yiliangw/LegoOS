@@ -15,18 +15,23 @@ int lego_eth_init(void *unused)
         return err;
     }
 
-	complete(&eth_init_done);
+	// complete(&eth_init_done);
+
+    fit_dispatch();
+
 	return 0;
 }
 
 int ibapi_send_reply_imm(int target_node, void *addr, int size, void *ret_addr,
     int max_ret_size, int if_use_ret_phys_addr)
 {
-    return 0;
+    return fit_send_reply_timeout(target_node, addr, size, ret_addr,
+        max_ret_size, if_use_ret_phys_addr, FIT_MAX_TIMEOUT_SEC);
 }
 
 int ibapi_send_reply_timeout(int target_node, void *addr, int size, void *ret_addr,
     int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec)
 {
-    return 0;
+    return fit_send_reply_timeout(target_node, addr, size, ret_addr,
+        max_ret_size, if_use_ret_phys_addr, timeout_sec);
 }

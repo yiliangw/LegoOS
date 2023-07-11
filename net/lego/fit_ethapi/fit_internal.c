@@ -1,3 +1,6 @@
+#include <lego/semaphore.h>
+#include <lego/time.h>
+#include <lego/jiffies.h>
 #include <lego/printk.h>
 #include <lego/completion.h>
 #include <lego/delay.h>
@@ -16,8 +19,23 @@
 
 static const char e1000_netif_name[] = "en";
 
-
 static struct netif e1000_netif;
+static struct semaphore e1000_sem;    /* pending e1000 interrupt number */
+
+#ifndef MIN()
+#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
+#endif
+
+#define ARP_TMR_INTERVAL_MS     ARP_TMR_INTERVAL
+#define IP_TMR_INTERVAL_MS      IP_TMR_INTERVAL
+#define SEM_DOWN_TIMEOUT_MS     (MIN(ARP_TMR_INTERVAL_MS, IP_TMR_INTERVAL_MS) + 10)
+
+static struct timespec ts_etharp;
+static struct timespec ts_ipreass;
+static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
+{
+    return (t1->tv_sec - t2->tv_sec) * 1000 + (t1->tv_nsec - t2->tv_nsec) / 1000000;
+}
 
 /**
  * Network interface test
@@ -167,18 +185,7 @@ static struct pbuf *e1000_netif_low_level_input(void)
  */
 static void __e1000_input_callback(void)
 {
-    struct pbuf *p;
-
-    p = e1000_netif_low_level_input();
-    /* no packet could be read, silently ignore this */
-    if (p == NULL) return;
-
-    pr_debug("Ehernet FIT: Received packet, len: %d\n", p->len);
-    
-    /* here input() has been initialized to ethernet_input, which
-    will take care of the Ethernet header */
-    // TODO: Shall we divide top half and bottom half?
-    e1000_netif.input(p, &e1000_netif);
+    up(&e1000_sem);
 }
 
 /**
@@ -211,6 +218,7 @@ static err_t e1000_netif_init_cb(struct netif *netif)
 
     /* We should have called e1000_init() by now, but the input callback has 
         not been set yet */
+    sema_init(&e1000_sem, 0);
     e1000_input_callback = __e1000_input_callback;
 
     etharp_init();
@@ -258,11 +266,66 @@ int fit_init_e1000_netif(void)
 
     pr_info("Ethernet FIT: netif initialized\n");
 
-    e1000_netif_test();
-
     return 0;
 
 ip_err:
     pr_err("Ehernet FIT: netif initialization failed\n");
     return -EINVAL;
+}
+
+static void try_e1000_input(void)
+{
+    struct pbuf *p;
+
+    p = e1000_netif_low_level_input();
+    /* no packet could be read, silently ignore this */
+    if (p == NULL)
+        return;
+    pr_debug("Ehernet FIT: Received packet, len: %d\n", p->len);
+    
+    /* here input() has been initialized to ethernet_input, which
+    will take care of the Ethernet header */
+    e1000_netif.input(p, &e1000_netif);
+}
+
+void fit_dispatch(void)
+{
+    struct timespec ts;
+    int ret;
+
+    pr_info("Ethernet FIT: dispatch\n");
+
+    e1000_netif_test();
+
+    ts_etharp = ts_ipreass = current_kernel_time();
+
+    while(1) {
+        /* Clear the input buffer */
+        while(down_trylock(&e1000_sem) == 0) {
+            try_e1000_input();
+        }
+
+        /* polling for lwIP */
+        ts = current_kernel_time();
+        if (__timespec_diff_ms(&ts, &ts_etharp) >= ARP_TMR_INTERVAL_MS) {
+            ts_etharp = ts;
+            etharp_tmr();
+        }
+        if (__timespec_diff_ms(&ts, &ts_ipreass) >= IP_TMR_INTERVAL_MS) {
+            ts_ipreass = ts;
+            ip_reass_tmr();
+        }
+
+        ret = down_timeout(&e1000_sem, msecs_to_jiffies(SEM_DOWN_TIMEOUT_MS));
+        if (ret == 0) {
+            /* The semaphore is acquired */
+            try_e1000_input();
+        }
+    }
+}
+
+int fit_send_reply_timeout(int target_node, void *addr, int size, void *ret_addr,
+    int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec)
+{
+    return 0;
 }
