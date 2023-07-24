@@ -1,5 +1,5 @@
-#include "asm/page.h"
-#include "asm/page_types.h"
+#include <lego/device.h>
+#include <lego/dma-mapping.h>
 #include <lego/errno.h>
 #include <lego/kernel.h>
 #include <lego/printk.h>
@@ -9,129 +9,23 @@
 #include <lego/irqdesc.h>
 #include <lego/mm.h>
 
-#include <asm/io.h>
 #include <net/netif/etharp.h>
+
+#include "e1000.h"
 #include <net/e1000.h>
 
-#define GITHUB_SOURCE
 
+static volatile u32 *e1000;
 
-#define E1000_LOCATE(offset)	(offset >> 2)
+// struct E1000TxDesc tx_desc_list[TX_DESC_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
+// char tx_pbuf[TX_DESC_SIZE][TX_PACKET_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
+struct E1000TxDesc *tx_desc_list;
+u8 *tx_pbuf;
 
-#define TX_DESC_SIZE     32
-#define TX_PACKET_SIZE   2048
-
-#define RX_DESC_SIZE     128
-#define RX_PACKET_SIZE   2048
-
-/* Register Set
- * 
- * RW - register is both readable and writable
- * 
- */
-#define E1000_DEVICE_STATUS   0x00008  /* Device Status - RO */
-
-#define E1000_ICS      0x000C8  /* Interrupt Cause Set - WO */
-#define E1000_IMS      0x000D0  /* Interrupt Mask Set - RW */
-
-#define E1000_RCTL     0x00100  /* RX Control - RW */
-#define E1000_TCTL     0x00400  /* TX Control - RW */
-
-#define E1000_RDBAL    0x02800  /* RX Descriptor Base Address Low - RW */
-#define E1000_RDBAH    0x02804  /* RX Descriptor Base Address High - RW */
-#define E1000_RDLEN    0x02808  /* RX Descriptor Length - RW */
-#define E1000_RDH      0x02810  /* RX Descriptor Head - RW */
-#define E1000_RDT      0x02818  /* RX Descriptor Tail - RW */
-#define E1000_RA       0x05400  /* Receive Address - RW Array */
-
-#define E1000_TDBAL    0x03800  /* TX Descriptor Base Address Low - RW */
-#define E1000_TDBAH    0X03804  /* TX Descriptor Base Address High - RW */
-#define E1000_TDLEN    0x03808  /* TX Descriptor Length - RW */
-
-#define E1000_TDH      0x03810  /* TX Descriptor Head - RW */
-#define E1000_TDT      0x03818  /* TX Descripotr Tail - RW */
-
-#define E1000_TIPG     0x00410  /* TX Inter-packet gap -RW */
-
-/* Transmit Control */
-#define E1000_TCTL_RST    0x00000001    /* Reserved */
-#define E1000_TCTL_EN     0x00000002    /* enable tx */
-#define E1000_TCTL_BCE    0x00000004    /* Reserved */
-#define E1000_TCTL_PSP    0x00000008    /* pad short packets */
-#define E1000_TCTL_CT     0x00000ff0    /* collision threshold */
-#define E1000_TCTL_COLD   0x003ff000    /* collision distance */
-#define E1000_TCTL_SWXOFF 0x00400000    /* SW Xoff transmission */
-#define E1000_TCTL_PBE    0x00800000    /* Reserved */
-#define E1000_TCTL_RTLC   0x01000000    /* Re-transmit on late collision */
-#define E1000_TCTL_NRTU   0x02000000    /* No Re-transmit on underrun */
-#define E1000_TCTL_MULR   0x10000000    /* Reserved */
-
-#define E1000_RCTL_EN     0x00000002    /* enable */
-#define E1000_RCTL_BAM    0x00008000    /* broadcast enable */
-#define E1000_RCTL_SECRC  0x04000000    /* Strip Ethernet CRC */
-
-
-/* Transmit Descriptor */
-struct E1000TxDesc {
-    uint64_t buffer_addr;       /* Address of the descriptor's data buffer */
-
-	uint16_t length;    /* Data buffer length */
-    uint8_t cso;        /* Checksum offset */
-    uint8_t cmd;        /* Descriptor control */
-
-    uint8_t status;     /* Descriptor status */
-    uint8_t css;        /* Checksum start */
-    uint16_t special;
-
-}__attribute__((packed));
-
-/* Transmit Descriptor bit definitions */
-#define E1000_TXD_DTYP_D     0x00100000 /* Data Descriptor */
-#define E1000_TXD_DTYP_C     0x00000000 /* Context Descriptor */
-
-
-#define E1000_TXD_CMD_EOP    0x01 /* End of Packet */
-#define E1000_TXD_CMD_RS     0x08 /* Report Status */
-
-#define E1000_TXD_STAT_DD    0x00000001 /* Descriptor Done */
-#define E1000_TXD_STAT_EC    0x00000002 /* Excess Collisions */
-#define E1000_TXD_STAT_LC    0x00000004 /* Late Collisions */
-#define E1000_TXD_STAT_TU    0x00000008 /* Transmit underrun */
-#define E1000_TXD_STAT_TC    0x00000004 /* Tx Underrun */
-
-/* Receive Descriptor */
-struct E1000RxDesc {
-	uint64_t buffer_addr;
-	uint16_t length;             /* Data buffer length */
-	uint16_t chksum;             /* Check Sum */
-	uint8_t  status;
-	uint8_t  err;
-	uint16_t special;
-};
-
-/* Transmit Descriptor bit definitions */
-#define E1000_RAH_AV            0x80000000        	/* Receive descriptor valid */
-#define E1000_RXD_STAT_DD       0x01    			/* Descriptor Done */
-#define E1000_RXD_STAT_EOP      0x02    			/* End of Packet */
-
-/* these buffer sizes are valid if E1000_RCTL_BSEX is 0 */
-#define E1000_RCTL_SZ_2048        0x00000000    /* rx buffer size 2048 */
-#define E1000_RCTL_SZ_1024        0x00010000    /* rx buffer size 1024 */
-#define E1000_RCTL_SZ_512         0x00020000    /* rx buffer size 512 */
-#define E1000_RCTL_SZ_256         0x00030000    /* rx buffer size 256 */
-/* these buffer sizes are valid if E1000_RCTL_BSEX is 1 */
-#define E1000_RCTL_SZ_16384       0x00010000    /* rx buffer size 16384 */
-#define E1000_RCTL_SZ_8192        0x00020000    /* rx buffer size 8192 */
-#define E1000_RCTL_SZ_4096        0x00030000    /* rx buffer size 4096 */
-
-#define E1000_LOCATE(offset)  (offset >> 2)
-static volatile uint32_t *e1000;
-
-struct E1000TxDesc tx_desc_list[TX_DESC_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
-char tx_pbuf[TX_DESC_SIZE][TX_PACKET_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
-
-struct E1000RxDesc rx_desc_list[RX_DESC_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
-char rx_pbuf[RX_DESC_SIZE][RX_PACKET_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
+// struct E1000RxDesc rx_desc_list[RX_DESC_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
+// char rx_pbuf[RX_DESC_SIZE][RX_PACKET_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
+struct E1000RxDesc *rx_desc_list;
+u8 *rx_pbuf;
 
 void (*e1000_input_callback)(void) = NULL;
 u8 e1000_mac[ETHARP_HWADDR_LEN];
@@ -204,21 +98,26 @@ int __init e1000_init(void)
 
 int e1000_transmit(const void *addr, u16 len)
 {
+	size_t tdt;
+	struct E1000TxDesc *tail_desc;
+
 	pr_debug("e1000: Transmiting a packet len=%u\n", len);
-	size_t tdt = e1000[E1000_LOCATE(E1000_TDT)];
-	struct E1000TxDesc *tail_desc = &tx_desc_list[tdt];
+
+	tdt = e1000[E1000_LOCATE(E1000_TDT)];
+	tail_desc = tx_desc_list + tdt;
 	
 	if ( !(tail_desc->status & E1000_TXD_STAT_DD )) {
 		// Status is not DD
+		pr_debug("e1000: Transmiting status is not DD\n");
 		return -ENODATA;
 	}
-	memmove(tx_pbuf[tdt], addr, len);
+	memcpy(tx_pbuf + TX_PACKET_SIZE * tdt, addr, len);
 	
 	tail_desc->length = (uint16_t )len;
 	// clear DD 
 	tail_desc->status &= (~E1000_TXD_STAT_DD);
 
-	e1000[E1000_LOCATE(E1000_TDT)] = (tdt+1) % TX_DESC_SIZE;
+	e1000[E1000_LOCATE(E1000_TDT)] = (tdt+1) % TX_DESC_NUM;
 
 	pr_debug("e1000: Transmission done\n");
 	return 0;
@@ -232,11 +131,11 @@ int e1000_receive(void *buf, u16 *len)
 		return -1;
 	}
 	*len = rx_desc_list[next].length;
-	memcpy(buf, rx_pbuf[next], *len);
+	memcpy(buf, rx_pbuf + next * RX_PACKET_SIZE, *len);
 
 	rx_desc_list[next].status &= ~E1000_RXD_STAT_DD; 
-	next = (next + 1) % RX_DESC_SIZE;
-	e1000[E1000_LOCATE(E1000_RDT)] = (tail + 1 ) % RX_DESC_SIZE;
+	next = (next + 1) % RX_DESC_NUM;
+	e1000[E1000_LOCATE(E1000_RDT)] = (tail + 1 ) % RX_DESC_NUM;
 	return 0;
 }
 
@@ -275,20 +174,36 @@ static int e1000_set_mac(void)
 	return 0;
 }
 
-static void e1000_transmit_init(void) 
+static void e1000_transmit_init(struct pci_dev *pdev) 
 {
 	size_t i;
-	memset(tx_desc_list, 0 , sizeof(struct E1000TxDesc) * TX_DESC_SIZE);
-	for (i = 0; i < TX_DESC_SIZE; i++) {
-		tx_desc_list[i].buffer_addr = virt_to_phys(tx_pbuf[i]);
-		tx_desc_list[i].status = E1000_TXD_STAT_DD;
-		tx_desc_list[i].cmd    =  E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
-		
+	dma_addr_t desc_dma_addr, pbuf_dma_addr;
+	
+	const size_t desc_size = sizeof(struct E1000TxDesc) * TX_DESC_NUM;
+	const size_t buf_size = TX_DESC_NUM * TX_PACKET_SIZE;
+
+	// alloc DMA memory for transmission
+	tx_desc_list = (struct E1000TxDesc *)dma_alloc_coherent(&pdev->dev, desc_size, &desc_dma_addr, GFP_KERNEL);
+	if (tx_desc_list == NULL) {
+		pr_err("e1000: dma_alloc_coherent\n");
+		return;
+	}
+	tx_pbuf = dma_alloc_coherent(&pdev->dev, buf_size, &pbuf_dma_addr, GFP_KERNEL);
+	if (tx_pbuf == NULL) {
+		pr_err("e1000: dma_alloc_coherent\n");
+		return;
 	}
 
-	e1000[E1000_LOCATE(E1000_TDBAL)] = virt_to_phys(tx_desc_list);
-	e1000[E1000_LOCATE(E1000_TDBAH)] = 0;
-	e1000[E1000_LOCATE(E1000_TDLEN)] = sizeof(struct E1000TxDesc) * TX_DESC_SIZE;
+	memset(tx_desc_list, 0 , desc_size);
+	for (i = 0; i < TX_DESC_NUM; i++) {
+		tx_desc_list[i].buffer_addr = pbuf_dma_addr + i * TX_PACKET_SIZE;
+		tx_desc_list[i].status = E1000_TXD_STAT_DD;
+		tx_desc_list[i].cmd    =  E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
+	}
+	
+	e1000[E1000_LOCATE(E1000_TDBAL)] = desc_dma_addr & 0xFFFFFFFF;
+	e1000[E1000_LOCATE(E1000_TDBAH)] = (desc_dma_addr >> 32) & 0xFFFFFFFF;
+	e1000[E1000_LOCATE(E1000_TDLEN)] = desc_size;
 	// ensure that TDH and TDT are 0 index not offset
 	e1000[E1000_LOCATE(E1000_TDH)] = 0;
 	e1000[E1000_LOCATE(E1000_TDT)] = 0;
@@ -302,29 +217,47 @@ static void e1000_transmit_init(void)
 	// 10 8 6 
 	// 10 8 12
 	e1000[E1000_LOCATE(E1000_TIPG)] = 10 | (8 << 10) | (12 << 20);
+	pr_debug("e1000: Transmit init done\n");
 }
 
-static void e1000_receive_init(void)
+static void e1000_receive_init(struct pci_dev *pdev)
 {
 	size_t i;
-	memset(rx_desc_list, 0 , sizeof(struct E1000RxDesc) * RX_DESC_SIZE);
-	for (i = 0; i < RX_DESC_SIZE; i++) {
-		rx_desc_list[i].buffer_addr = virt_to_phys(rx_pbuf[i]);
+	dma_addr_t desc_dma_addr, pbuf_dma_addr;
+	const size_t desc_size = sizeof(struct E1000RxDesc) * RX_DESC_NUM;
+	const size_t buf_size = RX_DESC_NUM * RX_PACKET_SIZE;
+
+	// alloc DMA memory for reception
+	rx_desc_list = (struct E1000RxDesc *)dma_alloc_coherent(&pdev->dev, desc_size, &desc_dma_addr, GFP_KERNEL);
+	if (rx_desc_list == NULL) {
+		pr_err("e1000: dma_alloc_coherent\n");
+		return;
+	}
+	rx_pbuf = dma_alloc_coherent(&pdev->dev, buf_size, &pbuf_dma_addr, GFP_KERNEL);
+	if (rx_pbuf == NULL) {
+		pr_err("e1000: dma_alloc_coherent\n");
+		return;
+	}
+
+	memset(rx_desc_list, 0 , desc_size);
+	for (i = 0; i < RX_DESC_NUM; i++) {
+		rx_desc_list[i].buffer_addr = pbuf_dma_addr + i * RX_PACKET_SIZE;
 	}
 	
-	e1000[E1000_LOCATE(E1000_ICS)] = 0;
+	// e1000[E1000_LOCATE(E1000_ICS)] = 0;
 	e1000[E1000_LOCATE(E1000_IMS)] = 0;
-	e1000[E1000_LOCATE(E1000_RDBAL)] = virt_to_phys(rx_desc_list);
-	e1000[E1000_LOCATE(E1000_RDBAH)] = 0;
-
-	e1000[E1000_LOCATE(E1000_RDLEN)] = sizeof(struct E1000RxDesc) * RX_DESC_SIZE;
-	e1000[E1000_LOCATE(E1000_RDT)] = RX_DESC_SIZE - 1;
+	e1000[E1000_LOCATE(E1000_RDBAL)] = desc_dma_addr & 0xFFFFFFFF;
+	e1000[E1000_LOCATE(E1000_RDBAH)] = (desc_dma_addr >> 32) & 0xFFFFFFFF;
+	e1000[E1000_LOCATE(E1000_RDLEN)] = desc_size;
 
 	e1000[E1000_LOCATE(E1000_RDH)] = 0;
+	e1000[E1000_LOCATE(E1000_RDT)] = RX_DESC_NUM - 1;
 
 	e1000[E1000_LOCATE(E1000_RCTL)] = E1000_RCTL_EN | E1000_RCTL_SECRC | E1000_RCTL_BAM | E1000_RCTL_SZ_2048;
 
 	e1000_set_mac();
+
+	pr_debug("e1000: Receive init done\n");
 }
 
 static irqreturn_t e1000_intr_handler(int irq, void *data)
@@ -376,10 +309,21 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	pr_debug("e1000: pdev %p\n", pdev);
 
-	e1000 = (uint32_t *)ioremap_nocache(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
-	e1000_transmit_init();
-	e1000_receive_init();
+	e1000 = (u32 *)ioremap_nocache(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
+
+	pci_set_master(pdev);
+
+	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	if (err) {
+		pr_err("e1000: dma_set_mask_and_coherent: %d\n", err);
+		return err;
+	}
+
+	e1000_transmit_init(pdev);
+	e1000_receive_init(pdev);
+
 	pr_debug("e1000: Initialized\n");
+	return 0;
 }
 
 static void e1000_remove(struct pci_dev *pdev)
