@@ -182,7 +182,7 @@ static void e1000_transmit_init(struct pci_dev *pdev)
 	const size_t desc_size = sizeof(struct E1000TxDesc) * TX_DESC_NUM;
 	const size_t buf_size = TX_DESC_NUM * TX_PACKET_SIZE;
 
-	// alloc DMA memory for transmission
+	// initialize DMA for transmit descriptors and buffers
 	tx_desc_list = (struct E1000TxDesc *)dma_alloc_coherent(&pdev->dev, desc_size, &desc_dma_addr, GFP_KERNEL);
 	if (tx_desc_list == NULL) {
 		pr_err("e1000: dma_alloc_coherent\n");
@@ -193,14 +193,12 @@ static void e1000_transmit_init(struct pci_dev *pdev)
 		pr_err("e1000: dma_alloc_coherent\n");
 		return;
 	}
-
 	memset(tx_desc_list, 0 , desc_size);
 	for (i = 0; i < TX_DESC_NUM; i++) {
 		tx_desc_list[i].buffer_addr = pbuf_dma_addr + i * TX_PACKET_SIZE;
 		tx_desc_list[i].status = E1000_TXD_STAT_DD;
 		tx_desc_list[i].cmd    =  E1000_TXD_CMD_RS | E1000_TXD_CMD_EOP;
 	}
-	
 	e1000[E1000_LOCATE(E1000_TDBAL)] = desc_dma_addr & 0xFFFFFFFF;
 	e1000[E1000_LOCATE(E1000_TDBAH)] = (desc_dma_addr >> 32) & 0xFFFFFFFF;
 	e1000[E1000_LOCATE(E1000_TDLEN)] = desc_size;
@@ -208,7 +206,7 @@ static void e1000_transmit_init(struct pci_dev *pdev)
 	e1000[E1000_LOCATE(E1000_TDH)] = 0;
 	e1000[E1000_LOCATE(E1000_TDT)] = 0;
 
-	// Initialize the Transmit Control Register (TCTL)
+	// initialize the Transmit Control Register (TCTL)
 	e1000[E1000_LOCATE(E1000_TCTL)] = E1000_TCTL_EN | 
 									  E1000_TCTL_PSP |
 									  (E1000_TCTL_CT & (0x10 << 4)) |
@@ -227,7 +225,7 @@ static void e1000_receive_init(struct pci_dev *pdev)
 	const size_t desc_size = sizeof(struct E1000RxDesc) * RX_DESC_NUM;
 	const size_t buf_size = RX_DESC_NUM * RX_PACKET_SIZE;
 
-	// alloc DMA memory for reception
+	// initialize DMA for receive descriptors and buffers
 	rx_desc_list = (struct E1000RxDesc *)dma_alloc_coherent(&pdev->dev, desc_size, &desc_dma_addr, GFP_KERNEL);
 	if (rx_desc_list == NULL) {
 		pr_err("e1000: dma_alloc_coherent\n");
@@ -238,14 +236,10 @@ static void e1000_receive_init(struct pci_dev *pdev)
 		pr_err("e1000: dma_alloc_coherent\n");
 		return;
 	}
-
 	memset(rx_desc_list, 0 , desc_size);
 	for (i = 0; i < RX_DESC_NUM; i++) {
 		rx_desc_list[i].buffer_addr = pbuf_dma_addr + i * RX_PACKET_SIZE;
 	}
-	
-	// e1000[E1000_LOCATE(E1000_ICS)] = 0;
-	e1000[E1000_LOCATE(E1000_IMS)] = 0;
 	e1000[E1000_LOCATE(E1000_RDBAL)] = desc_dma_addr & 0xFFFFFFFF;
 	e1000[E1000_LOCATE(E1000_RDBAH)] = (desc_dma_addr >> 32) & 0xFFFFFFFF;
 	e1000[E1000_LOCATE(E1000_RDLEN)] = desc_size;
@@ -263,12 +257,16 @@ static void e1000_receive_init(struct pci_dev *pdev)
 static irqreturn_t e1000_intr_handler(int irq, void *data)
 {
 	struct pci_dev *pdev;
+	u32 icr;
+
+	icr = e1000[E1000_LOCATE(E1000_ICR)];
+	// pr_debug("e1000: Interrupt handler, cause=%x\n", cause);
 
 	pdev = (struct pci_dev *) data;
 	if (irq != pdev->irq)
 		return IRQ_NONE;
 
-	if (e1000_input_callback)
+	if ((icr & E1000_IMS_RXT0) && e1000_input_callback)
 		e1000_input_callback();
 
 	return IRQ_HANDLED;
@@ -295,24 +293,29 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		return err;
 	}
 
+	// initialize Memory-mapped I/O
 	err = pci_request_regions(pdev, "e1000");
 	if (err) {
 		pr_err("e1000: pci_request_regions: %d\n", err);
 		return err;
 	}
+	e1000 = (u32 *)ioremap_nocache(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
 
+	// initialize Interrupt
 	err = e1000_request_irq(pdev);
 	if (err) {
 		pr_err("e1000: request_irq: %d\n", err);
 		return err;
 	}
+	e1000[E1000_LOCATE(E1000_IMS)] = IMS_ENABLE_MASK;
+	// fire a link status change interrupt to start the watchdog
+	e1000[E1000_LOCATE(E1000_ICS)] = E1000_ICS_LSC;
 
 	pr_debug("e1000: pdev %p\n", pdev);
 
-	e1000 = (u32 *)ioremap_nocache(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
 
+	// initialize DMA
 	pci_set_master(pdev);
-
 	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
 	if (err) {
 		pr_err("e1000: dma_set_mask_and_coherent: %d\n", err);

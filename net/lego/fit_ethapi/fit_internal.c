@@ -17,10 +17,13 @@
 
 #include "fit_internal.h"
 
+#define FIT_UDP_PORT 0x7000
+
 static const char e1000_netif_name[] = "en";
 
 static struct netif e1000_netif;
 static struct semaphore e1000_sem;    /* pending e1000 interrupt number */
+static struct udp_pcb *pcb;
 
 #ifndef MIN()
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
@@ -41,7 +44,7 @@ static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
  * Network interface test
  */
 
-#define TEST_PORT 0x7000
+#define TEST_PORT 6000
 
 #define NODE_0_IP "10.0.2.15"
 #define NODE_1_IP "10.0.2.16"
@@ -55,7 +58,7 @@ static void __e1000_input_callback(void);
 
 static void client_receive_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, u16_t port)
 {
-    pr_info("FIT client: Received packet from port %d\n", port);
+    pr_info("FIT client: Received packet from port %d, len=%u\n", port, p->len);
     pbuf_free(p);
 }
 
@@ -77,19 +80,18 @@ static void test_client(void)
     udp_bind(pcb, IP_ADDR_ANY, TEST_PORT);
     udp_recv(pcb, client_receive_cb, NULL);
 
-    while(1) {
-        // __e1000_input_callback();
-        udelay(5000);
+    for (;;) {
+        // etharp_tmr();
+        mdelay(500);
         p = pbuf_alloc(PBUF_TRANSPORT, sizeof(msg), PBUF_RAM);
         memcpy(p->payload, msg, sizeof(msg));
         if (p == NULL) {
             pr_err("FIT client: Failed to allocate pbuf\n");
-            return;
+            continue;
         }
+        pr_info("FIT client: Sending packet\n");
         udp_sendto(pcb, p, &server_ip, TEST_PORT);
         pbuf_free(p);
-        etharp_tmr();
-        schedule();
     }
 }
 
@@ -103,22 +105,27 @@ static void server_receive_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, st
 static void test_server(void)
 {
     struct udp_pcb *pcb;
+    int i;
 
     pr_info("test_server\n");
 
     pcb = udp_new();
     if (pcb == NULL) {
-        pr_err("FIT client: Failed to create udp pcb\n");
+        pr_err("FIT server: Failed to create udp pcb\n");
     }
 
     udp_bind(pcb, IP_ADDR_ANY, TEST_PORT);
     udp_recv(pcb, server_receive_cb, NULL);
 
-    while(1) {
-        // __e1000_input_callback();
-        udelay(5000);
-        etharp_tmr();
-        schedule();
+    i = 100;
+    for (;;) {
+        // etharp_tmr();
+        mdelay(500);
+        i++;
+        if (i >= 100) {
+            pr_debug("server alive\n");
+            i = 0;
+        }
     }
 }
 
@@ -142,7 +149,7 @@ static err_t e1000_netif_low_level_output(struct netif *netif, struct pbuf *p)
     pr_debug("Ethernet FIT: Transmitting packet, len: %d\n", p->len);
     err = e1000_transmit(p->payload, p->len);
     if (err) {
-        pr_err("Ehernet FIT: Failed to transmit packet\n");
+        pr_err("Ethernet FIT: Failed to transmit packet\n");
         return ERR_IF;
     }
     return ERR_OK;
@@ -158,15 +165,16 @@ static struct pbuf *e1000_netif_low_level_input(void)
 
     err = e1000_receive(buf, &len);
     if (err) {
-        pr_err("Ehernet FIT: Failed to receive packet\n");
+        pr_err("Ethernet FIT: Failed to receive packet\n");
         return NULL;
     }
 
     p = pbuf_alloc(PBUF_RAW, len, PBUF_POOL);
     if (p == NULL) {
-        pr_warn("Ehernet FIT: Failed to allocate pbuf\n");
+        pr_warn("Ethernet FIT: Failed to allocate pbuf\n");
         return NULL;
     }
+    pr_info("Ethernet FIT: Received packet, len: %d\n", len);
 
     copied_len = 0;
     for (q = p; q != NULL; q = q->next) {
@@ -183,9 +191,12 @@ static struct pbuf *e1000_netif_low_level_input(void)
 /**
  * This function is called in the interrupt context
  */
+static void try_e1000_input(void);
 static void __e1000_input_callback(void)
 {
-    up(&e1000_sem);
+    pr_info("Ethernet FIT: e1000 interrupt detected\n");
+    try_e1000_input();
+    // up(&e1000_sem);
 }
 
 /**
@@ -277,15 +288,30 @@ static void try_e1000_input(void)
 {
     struct pbuf *p;
 
-    p = e1000_netif_low_level_input();
-    /* no packet could be read, silently ignore this */
-    if (p == NULL)
-        return;
-    pr_debug("Ehernet FIT: Received packet, len: %d\n", p->len);
+    while(1) {
+        p = e1000_netif_low_level_input();
+        /* no packet could be read, silently ignore this */
+        if (p == NULL)
+            break;
+        pr_debug("Ehernet FIT: Received packet, len: %d\n", p->len);
+        
+        /* here input() has been initialized to ethernet_input, which
+        will take care of the Ethernet header */
+        e1000_netif.input(p, &e1000_netif);
+    }
+
     
-    /* here input() has been initialized to ethernet_input, which
-    will take care of the Ethernet header */
-    e1000_netif.input(p, &e1000_netif);
+}
+
+static void udp_receive_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, u16_t port)
+{
+    pr_info("Ethernet FIT: Received packet from port %d\n", port);
+
+    /* Find the corresponding RPC handle in the request pool */
+
+    /* Set the reply content in the registerd address */
+
+    /* Up the RPC handle's semaphore */
 }
 
 void fit_dispatch(void)
@@ -296,6 +322,17 @@ void fit_dispatch(void)
     pr_info("Ethernet FIT: dispatch\n");
 
     e1000_netif_test();
+
+    panic("test finished\n");
+
+    /* Setup the UDP pcb */
+    pcb = udp_new();
+    if (pcb == NULL) {
+        pr_err("Ehernet FIT: Failed to create udp pcb\n");
+        return;
+    }
+    udp_bind(pcb, IP_ADDR_ANY, FIT_UDP_PORT);
+    udp_recv(pcb, udp_receive_cb, NULL);
 
     ts_etharp = ts_ipreass = current_kernel_time();
 
@@ -327,5 +364,11 @@ void fit_dispatch(void)
 int fit_send_reply_timeout(int target_node, void *addr, int size, void *ret_addr,
     int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec)
 {
+    /* Register the RPC handle in the request pool */
+    
+    /* Invoke udp_send to do transmission */
+
+    /* Wait on the the RPC handle's semaphore with timeout */
+
     return 0;
 }
