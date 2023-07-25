@@ -123,19 +123,37 @@ int e1000_transmit(const void *addr, u16 len)
 	return 0;
 }
 
+size_t e1000_pending_reception(void)
+{
+	u32 rdt, rdh;
+	
+	rdt = e1000[E1000_LOCATE(E1000_RDT)];
+	rdh = e1000[E1000_LOCATE(E1000_RDH)];
+	return (rdh > rdt) ? (rdh - rdt - 1) : (rdh + RX_DESC_NUM - rdt - 1);
+}
+
 int e1000_receive(void *buf, u16 *len)
 {
-	static size_t next = 0;
-	size_t tail = e1000[E1000_LOCATE(E1000_RDT)];
-	if ( !(rx_desc_list[next].status & E1000_RXD_STAT_DD) ) {
-		return -1;
+	u32 rdt, rdh, next;
+
+	rdt = e1000[E1000_LOCATE(E1000_RDT)];
+	rdh = e1000[E1000_LOCATE(E1000_RDH)];
+	next = (rdt + 1) % RX_DESC_NUM;
+
+	if (next == rdh) {
+		return -ENODATA;
 	}
+
+	if (!(rx_desc_list[next].status & E1000_RXD_STAT_DD) ) {
+		pr_err("e1000: Receive status is not DD\n");
+		return -EPERM;
+	}
+
 	*len = rx_desc_list[next].length;
 	memcpy(buf, rx_pbuf + next * RX_PACKET_SIZE, *len);
 
 	rx_desc_list[next].status &= ~E1000_RXD_STAT_DD; 
-	next = (next + 1) % RX_DESC_NUM;
-	e1000[E1000_LOCATE(E1000_RDT)] = (tail + 1 ) % RX_DESC_NUM;
+	e1000[E1000_LOCATE(E1000_RDT)] = next;
 	return 0;
 }
 

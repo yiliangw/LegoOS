@@ -36,7 +36,7 @@ static inline int socket_file_open(struct file *filp)
 #endif /* CONFIG_SOCKET_SYSCALL */
 
 #ifdef CONFIG_ETHERNET_FIT
-extern struct completion eth_init_done;
+extern struct completion eth_fit_init_done;
 int lego_eth_init(void *unused);
 #endif /* CONFIG_ETHERNET_FIT */ 
 

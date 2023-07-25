@@ -3,7 +3,7 @@
 
 #include "fit_internal.h"
 
-__initdata DEFINE_COMPLETION(eth_init_done);
+__initdata DEFINE_COMPLETION(eth_fit_init_done);
 
 int lego_eth_init(void *unused)
 {
@@ -15,7 +15,7 @@ int lego_eth_init(void *unused)
         return err;
     }
 
-	// complete(&eth_init_done);
+	complete(&eth_fit_init_done);
 
     fit_dispatch();
 

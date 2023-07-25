@@ -1,3 +1,4 @@
+#include "lego/bug.h"
 #include <lego/semaphore.h>
 #include <lego/time.h>
 #include <lego/jiffies.h>
@@ -5,6 +6,7 @@
 #include <lego/completion.h>
 #include <lego/delay.h>
 #include <lego/sched.h>
+#include <lego/kthread.h>
 
 #include <net/netif/etharp.h>
 #include <net/e1000.h>
@@ -17,7 +19,7 @@
 
 #include "fit_internal.h"
 
-#define FIT_UDP_PORT 0x7000
+#define FIT_UDP_PORT 7000
 
 static const char e1000_netif_name[] = "en";
 
@@ -62,13 +64,13 @@ static void client_receive_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, st
     pbuf_free(p);
 }
 
-static void test_client(void)
+static int test_client_thread(void *unused)
 {
     struct udp_pcb *pcb;
     struct pbuf *p;
     struct ip_addr server_ip;
 
-    pr_info("test_client\n");
+    pr_info("Testing client\n");
 
     IP4_ADDR(&server_ip, 10, 0, 2, 15);
 
@@ -80,9 +82,7 @@ static void test_client(void)
     udp_bind(pcb, IP_ADDR_ANY, TEST_PORT);
     udp_recv(pcb, client_receive_cb, NULL);
 
-    for (;;) {
-        // etharp_tmr();
-        mdelay(500);
+    while(1) {
         p = pbuf_alloc(PBUF_TRANSPORT, sizeof(msg), PBUF_RAM);
         memcpy(p->payload, msg, sizeof(msg));
         if (p == NULL) {
@@ -90,53 +90,38 @@ static void test_client(void)
             continue;
         }
         pr_info("FIT client: Sending packet\n");
-        udp_sendto(pcb, p, &server_ip, TEST_PORT);
+        udp_sendto(pcb, p, &server_ip, FIT_UDP_PORT);
         pbuf_free(p);
+
+        set_current_state(TASK_INTERRUPTIBLE);
+        schedule_timeout(msecs_to_jiffies(500));
     }
+    BUG();
+    return 0;
 }
 
-static void server_receive_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, u16_t port)
+static void try_e1000_input(void);
+
+
+static int test_server_thread(void *unused)
 {
-    pr_info("FIT server: Received packet from port %d\n", port);
-    udp_sendto(pcb, p, addr, port);
-    pbuf_free(p);
+    pr_info("Testing server\n");
+    while(1) {
+        set_current_state(TASK_INTERRUPTIBLE);
+        schedule();
+    }
+    BUG();
+    return 0;
 }
 
-static void test_server(void)
-{
-    struct udp_pcb *pcb;
-    int i;
-
-    pr_info("test_server\n");
-
-    pcb = udp_new();
-    if (pcb == NULL) {
-        pr_err("FIT server: Failed to create udp pcb\n");
-    }
-
-    udp_bind(pcb, IP_ADDR_ANY, TEST_PORT);
-    udp_recv(pcb, server_receive_cb, NULL);
-
-    i = 100;
-    for (;;) {
-        // etharp_tmr();
-        mdelay(500);
-        i++;
-        if (i >= 100) {
-            pr_debug("server alive\n");
-            i = 0;
-        }
-    }
-}
-
-static void e1000_netif_test(void)
+void e1000_netif_test(void)
 {
     if (CONFIG_FIT_LOCAL_ID == 0) {
         /* udp server */
-        test_server();
+        kthread_run(test_server_thread, NULL, "fit_server");
     } else {
         /* udp client */
-        test_client();
+        kthread_run(test_client_thread, NULL, "fit_client");
     }
 }
 
@@ -165,7 +150,7 @@ static struct pbuf *e1000_netif_low_level_input(void)
 
     err = e1000_receive(buf, &len);
     if (err) {
-        pr_err("Ethernet FIT: Failed to receive packet\n");
+        pr_err("Ethernet FIT: Failed to receive packet: %d\n", err);
         return NULL;
     }
 
@@ -174,7 +159,6 @@ static struct pbuf *e1000_netif_low_level_input(void)
         pr_warn("Ethernet FIT: Failed to allocate pbuf\n");
         return NULL;
     }
-    pr_info("Ethernet FIT: Received packet, len: %d\n", len);
 
     copied_len = 0;
     for (q = p; q != NULL; q = q->next) {
@@ -191,12 +175,10 @@ static struct pbuf *e1000_netif_low_level_input(void)
 /**
  * This function is called in the interrupt context
  */
-static void try_e1000_input(void);
 static void __e1000_input_callback(void)
 {
     pr_info("Ethernet FIT: e1000 interrupt detected\n");
-    try_e1000_input();
-    // up(&e1000_sem);
+    up(&e1000_sem);
 }
 
 /**
@@ -246,15 +228,15 @@ int fit_init_e1000_netif(void)
     memset(&gateway, 0, sizeof(gateway));
 
     if ((ipaddr.addr = inet_addr(CONFIG_E1000_NETIF_IP)) == INADDR_NONE) {
-        pr_err("Ehernet FIT: Invalid IP address: %s\n", CONFIG_E1000_NETIF_IP);
+        pr_err("Ethernet FIT: Invalid IP address: %s\n", CONFIG_E1000_NETIF_IP);
         goto ip_err;
     }
     if ((netmask.addr = inet_addr(CONFIG_E1000_NETIF_MASK)) == INADDR_NONE) {
-        pr_err("Ehernet FIT: Invalid netmask: %s\n", CONFIG_E1000_NETIF_MASK);
+        pr_err("Ethernet FIT: Invalid netmask: %s\n", CONFIG_E1000_NETIF_MASK);
         goto ip_err;
     }
     if ((gateway.addr = inet_addr(CONFIG_E1000_NETIF_GATEWAY)) == INADDR_NONE) {
-        pr_err("Ehernet FIT: Invalid gateway: %s\n", CONFIG_E1000_NETIF_GATEWAY);
+        pr_err("Ethernet FIT: Invalid gateway: %s\n", CONFIG_E1000_NETIF_GATEWAY);
         goto ip_err;
     }
 
@@ -288,12 +270,12 @@ static void try_e1000_input(void)
 {
     struct pbuf *p;
 
-    while(1) {
+    while(e1000_pending_reception() > 0) {
         p = e1000_netif_low_level_input();
         /* no packet could be read, silently ignore this */
         if (p == NULL)
             break;
-        pr_debug("Ehernet FIT: Received packet, len: %d\n", p->len);
+        pr_debug("Ethernet FIT: Received packet (len=%d)\n", p->len);
         
         /* here input() has been initialized to ethernet_input, which
         will take care of the Ethernet header */
@@ -305,7 +287,8 @@ static void try_e1000_input(void)
 
 static void udp_receive_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, u16_t port)
 {
-    pr_info("Ethernet FIT: Received packet from port %d\n", port);
+    pr_info("Ethernet FIT: Received packet from port %d, length=%u\n", port, p->len);
+    pbuf_free(p);
 
     /* Find the corresponding RPC handle in the request pool */
 
@@ -321,10 +304,6 @@ void fit_dispatch(void)
 
     pr_info("Ethernet FIT: dispatch\n");
 
-    e1000_netif_test();
-
-    panic("test finished\n");
-
     /* Setup the UDP pcb */
     pcb = udp_new();
     if (pcb == NULL) {
@@ -333,6 +312,13 @@ void fit_dispatch(void)
     }
     udp_bind(pcb, IP_ADDR_ANY, FIT_UDP_PORT);
     udp_recv(pcb, udp_receive_cb, NULL);
+
+    /* Only try to get the packet from the driver */
+    while(1) {
+        down(&e1000_sem);
+        pr_debug("Ethernet FIT: e1000_sem down succeed\n");
+        try_e1000_input();
+    }
 
     ts_etharp = ts_ipreass = current_kernel_time();
 
