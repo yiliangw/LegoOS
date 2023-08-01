@@ -1,4 +1,9 @@
+#include "lego/bitops.h"
 #include "lego/bug.h"
+#include "lego/errno.h"
+#include "lego/fit_ibapi.h"
+#include "lego/spinlock.h"
+#include "net/lwip/arch.h"
 #include <lego/semaphore.h>
 #include <lego/time.h>
 #include <lego/jiffies.h>
@@ -7,6 +12,8 @@
 #include <lego/delay.h>
 #include <lego/sched.h>
 #include <lego/kthread.h>
+#include <lego/types.h>
+#include <lego/bitmap.h>
 
 #include <net/netif/etharp.h>
 #include <net/e1000.h>
@@ -19,28 +26,125 @@
 
 #include "fit_internal.h"
 
-#define FIT_UDP_PORT 7000
-
 static const char e1000_netif_name[] = "en";
-
 static struct netif e1000_netif;
 static struct semaphore e1000_sem;    /* pending e1000 interrupt number */
-static struct udp_pcb *pcb;
 
-#ifndef MIN()
-#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
-#endif
+typedef struct fit_context ctx_t;
 
-#define ARP_TMR_INTERVAL_MS     ARP_TMR_INTERVAL
-#define IP_TMR_INTERVAL_MS      IP_TMR_INTERVAL
-#define SEM_DOWN_TIMEOUT_MS     (MIN(ARP_TMR_INTERVAL_MS, IP_TMR_INTERVAL_MS) + 10)
+static ctx_t fit_ctx;
 
-static struct timespec ts_etharp;
-static struct timespec ts_ipreass;
+static fit_seqnum_t alloc_sequence_num(ctx_t *ctx)
+{
+    fit_seqnum_t num;
+    spin_lock(&ctx->sequence_num_lock);
+    num = ctx->sequence_num++;
+    spin_unlock(&ctx->sequence_num_lock);
+    return num;
+}
+
+static struct fit_s_handle *alloc_send_handle(ctx_t *ctx)
+{
+    unsigned int i;
+    struct fit_s_handle *handle;
+    spin_lock(&ctx->s_handles_lock);
+    i = find_first_zero_bit(ctx->s_handles_bitmap, FIT_NUM_SEND_HANDLE);
+    if (i == FIT_NUM_SEND_HANDLE)
+        handle = NULL;
+    else
+        handle = &ctx->s_handles[i];
+    spin_unlock(&ctx->s_handles_lock);
+    return handle;
+}
+
+static int free_send_handle(ctx_t *ctx, struct fit_s_handle *handle)
+{
+    int i = handle - ctx->s_handles;
+    if (i < 0 || i >= FIT_NUM_SEND_HANDLE) {
+        FIT_ERR("Invalid send handle\n");
+        return -EINVAL;
+    }
+    /* We do not need to lock here */
+    if (test_and_clear_bit(i, ctx->s_handles_bitmap) == 0) {
+        FIT_ERR("Freeing a free send handle\n");
+        return -EPERM;
+    }
+    return 0;
+}
+
+static struct fit_r_handle *alloc_recv_handle(ctx_t *ctx)
+{
+    unsigned int i;
+    struct fit_r_handle *handle;
+    spin_lock(&ctx->r_handles_lock);
+    i = find_first_zero_bit(ctx->r_handles_bitmap, FIT_NUM_RECV_HANDLE);
+    if (i == FIT_NUM_RECV_HANDLE)
+        handle = NULL;
+    else
+        handle = &ctx->r_handles[i];
+    spin_unlock(&ctx->r_handles_lock);
+    return handle;
+}
+
+static int free_recv_handle(ctx_t *ctx, struct fit_r_handle *handle)
+{
+    int i = handle - ctx->r_handles;
+    if (i < 0 || i >= FIT_NUM_RECV_HANDLE) {
+        FIT_ERR("Invalid recv handle\n");
+        return -EINVAL;
+    }
+    /* We do not need to lock here */
+    if (test_and_clear_bit(i, ctx->r_handles_bitmap) == 0) {
+        FIT_ERR("Freeing a free recv handle\n");
+        return -EPERM;
+    }
+    return 0;
+}
+
 static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
 {
     return (t1->tv_sec - t2->tv_sec) * 1000 + (t1->tv_nsec - t2->tv_nsec) / 1000000;
 }
+
+/* The function which performs transmission using lwIP */
+static int __udp_output(ctx_t *ctx, int fit_node, int fit_port, 
+        fit_rpc_id_t rpc_id, void *msg, size_t len)
+{
+    struct pbuf *p;
+    int ret;
+    struct ip_addr *dst_ip;
+    struct fit_hdr *hdr;
+
+    if (fit_node >= FIT_NUM_NODE) {
+        FIT_ERR("Invalid node number\n");
+        return -EINVAL;
+    }
+    dst_ip = &ctx->node_ip_addr[fit_node];
+
+    p = pbuf_alloc(PBUF_TRANSPORT, len + sizeof(struct fit_hdr), PBUF_RAM);
+    if (p == NULL) {
+        FIT_ERR("Failed to allocate pbuf\n");
+        return -ENOMEM;
+    }
+
+    /* set FIT header */
+    hdr = (struct fit_hdr *)p->payload;
+    hdr->rpc_id = rpc_id;
+    hdr->src_node = ctx->node_id;
+    hdr->dst_node = fit_node;
+    hdr->dst_port = fit_port;
+
+    memcpy(p->payload, msg, len);
+    FIT_DEBUG("Sending packet\n");
+    ret = udp_sendto(ctx->pcb, p, dst_ip, FIT_UDP_PORT);
+    if (ret) {
+        FIT_ERR("Failed to send packet\n");
+        return ret;
+    }
+    pbuf_free(p);
+    return 0;
+}
+
 
 /**
  * Network interface test
@@ -50,9 +154,6 @@ static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
 
 #define NODE_0_IP "10.0.2.15"
 #define NODE_1_IP "10.0.2.16"
-
-#define MCH_ARP_TIMER_INTERVAL_US       (ARP_TMR_INTERVAL * 1000)
-#define MCH_IPREASS_TIMER_INTERVAL_US   (IP_TMR_INTERVAL * 1000)
 
 static const char msg[] = "Hello, world!";
 
@@ -83,16 +184,7 @@ static int test_client_thread(void *unused)
     udp_recv(pcb, client_receive_cb, NULL);
 
     while(1) {
-        p = pbuf_alloc(PBUF_TRANSPORT, sizeof(msg), PBUF_RAM);
-        memcpy(p->payload, msg, sizeof(msg));
-        if (p == NULL) {
-            pr_err("FIT client: Failed to allocate pbuf\n");
-            continue;
-        }
-        pr_info("FIT client: Sending packet\n");
-        udp_sendto(pcb, p, &server_ip, FIT_UDP_PORT);
-        pbuf_free(p);
-
+        // __udp_output(pcb, &server_ip, FIT_UDP_PORT, (void *)msg, sizeof(msg));
         set_current_state(TASK_INTERRUPTIBLE);
         schedule_timeout(msecs_to_jiffies(500));
     }
@@ -281,13 +373,13 @@ static void try_e1000_input(void)
         will take care of the Ethernet header */
         e1000_netif.input(p, &e1000_netif);
     }
-
-    
 }
 
-static void udp_receive_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, u16_t port)
+static void __udp_receive_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, struct ip_addr *addr, u16_t port)
 {
-    pr_info("Ethernet FIT: Received packet from port %d, length=%u\n", port, p->len);
+    ctx_t *ctx = (ctx_t *)arg;
+
+    FIT_DEBUG("ctx[%d]eceived packet from port %d, length=%u\n", ctx->node_id, port, p->len);
     pbuf_free(p);
 
     /* Find the corresponding RPC handle in the request pool */
@@ -297,26 +389,53 @@ static void udp_receive_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, struc
     /* Up the RPC handle's semaphore */
 }
 
+static int fit_init_context(ctx_t *ctx, int node_id, u16 udp_port)
+{
+    memset(ctx, 0, sizeof(ctx_t));
+    ctx->node_id = node_id;
+
+    /* Set up UDP */
+    ctx->udp_port = udp_port;
+    ctx->pcb = udp_new();
+    if (ctx->pcb == NULL) {
+        FIT_ERR("Fail to create udp pcb\n");
+        return -ENOMEM;
+    }
+    udp_bind(ctx->pcb, IP_ADDR_ANY, ctx->udp_port);
+    udp_recv(ctx->pcb, __udp_receive_cb, ctx);
+    
+    /* Hardcode the IP table*/
+    IP4_ADDR(&ctx->node_ip_addr[0], 10, 0, 2, 15);
+    IP4_ADDR(&ctx->node_ip_addr[1], 10, 0, 2, 16);
+
+    ctx->sequence_num = 0;
+    spin_lock_init(&ctx->sequence_num_lock);
+    spin_lock_init(&ctx->s_handles_lock);
+    spin_lock_init(&ctx->r_handles_lock);
+
+    return 0;
+}
+
 void fit_dispatch(void)
 {
-    struct timespec ts;
+    /* LwIP timers */
+    struct timespec ts_etharp, ts_ipreass, ts;
     int ret;
 
-    pr_info("Ethernet FIT: dispatch\n");
+    ret = fit_init_context(&fit_ctx, MY_NODE_ID, FIT_UDP_PORT);
+    if (ret)
+        FIT_PANIC("Failed to init the context: %d\n", ret);
 
-    /* Setup the UDP pcb */
-    pcb = udp_new();
-    if (pcb == NULL) {
-        pr_err("Ehernet FIT: Failed to create udp pcb\n");
-        return;
-    }
-    udp_bind(pcb, IP_ADDR_ANY, FIT_UDP_PORT);
-    udp_recv(pcb, udp_receive_cb, NULL);
+    FIT_INFO("dispatched\n");
 
     /* Only try to get the packet from the driver */
     while(1) {
         down(&e1000_sem);
-        pr_debug("Ethernet FIT: e1000_sem down succeed\n");
+        /* Clear the semaphore before doing actual input because 
+        we will get all the pending input in try_e1000_input() */
+        while(down_trylock(&e1000_sem) == 0); 
+
+        FIT_DEBUG("e1000_sem down succeeds\n");
         try_e1000_input();
     }
 
@@ -348,13 +467,44 @@ void fit_dispatch(void)
 }
 
 int fit_send_reply_timeout(int target_node, void *addr, int size, void *ret_addr,
-    int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec)
+        int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec)
 {
+    struct fit_s_handle *handle;
+    int ret;
+
     /* Register the RPC handle in the request pool */
+    handle = alloc_send_handle(&fit_ctx);
+    if (handle == NULL) {
+        FIT_ERR("No memory for send handle\n");
+        return -ENOMEM;
+    }
+
+    /* Initialize the handle */
+    handle->id.node_id = fit_ctx.node_id;
+    handle->id.sequence_num = alloc_sequence_num(&fit_ctx);
+    sema_init(&handle->sema, 0);
+    handle->ret_addr = addr,
+    handle->max_ret_size = max_ret_size;
     
     /* Invoke udp_send to do transmission */
-
+    __udp_output(&fit_ctx, target_node, 0, handle->id, addr, size);
+    
     /* Wait on the the RPC handle's semaphore with timeout */
+    if (timeout_sec == 0 || timeout_sec > FIT_MAX_TIMEOUT_SEC)
+        timeout_sec = FIT_MAX_TIMEOUT_SEC;
 
+    ret = down_timeout(&handle->sema, msecs_to_jiffies(timeout_sec * 1000));
+
+    return ret;
+}
+
+int fit_reply_message(void *addr, int size, uintptr_t descriptor)
+{
+    return 0;
+}
+
+int fit_receive_message(unsigned int designed_port, void *ret_addr,
+        int receive_size, uintptr_t *descriptor)
+{
     return 0;
 }

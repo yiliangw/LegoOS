@@ -76,6 +76,8 @@ static inline void dump_ib_stats(void)
 }
 #endif
 
+#ifdef CONFIG_INFINIBAND_FIT
+
 /* for multicast and maybe other address ranges */
 struct fit_sglist {
 	void *addr;
@@ -138,7 +140,35 @@ int sock_epoll_callback(int target_node, int port);
 
 #endif /* CONFIG_SOCKET_O_IB */
 
-#else
+#elif defined(CONFIG_ETHERNET_FIT) /* CONFIG_INFINIBAND_FIT */
+int ethapi_send_reply_imm(int target_node, void *addr, int size, void *ret_addr,
+        int max_ret_size, int if_use_ret_phys_addr);
+int ethapi_send_reply_timeout(int target_node, void *addr, int size, void *ret_addr,
+        int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec);
+int ethapi_receive_message(unsigned int designed_port, void *ret_addr,
+        int receive_size, uintptr_t *descriptor);
+int ethapi_reply_message(void *addr, int size, uintptr_t descriptor);
+
+#define ibapi_reply_message(addr, size, descriptor) \
+	ethapi_reply_message(addr, size, descriptor)
+
+#define ibapi_receive_message(designed_port, ret_addr, receive_size, descriptor) \
+	ethapi_receive_message(designed_port, ret_addr, receive_size, descriptor)
+
+#define ibapi_send_reply_imm(target_node, addr, size, ret_addr, \
+		max_ret_size, if_use_ret_phys_addr) \
+	ethapi_send_reply_imm(target_node, addr, size, ret_addr, \
+		max_ret_size, if_use_ret_phys_addr)
+
+#define ibapi_send_reply_timeout(target_node, addr, size, ret_addr, \
+		max_ret_size, if_use_ret_phys_addr, timeout_sec) \
+	ethapi_send_reply_timeout(target_node, addr, size, ret_addr, \
+		max_ret_size, if_use_ret_phys_addr, timeout_sec)
+
+#define ibapi_get_node_id()	ethapi_get_node_id() 
+#endif /* CONFIG_INFINIBAND_FIT */
+
+#else /* CONFIG_FIT */
 
 static inline int ibapi_reply_message(void *addr, int size, uintptr_t descriptor)
 { return -EIO; }
