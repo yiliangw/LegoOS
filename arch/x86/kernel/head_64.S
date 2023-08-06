@@ -143,6 +143,27 @@ ENTRY(secondary_startup_64)
 	 * after the boot processor executes this code.
 	 */
 
+	movq	$(early_level4_pgt - __START_KERNEL_map), %rax
+
+	/*
+	 * Enable PAE mode and PGE
+	 *
+	 * PAE: must be set before entering IA-32e mode.
+	 * PGE: global pages are not flushed from the TLB on a
+	 *      task switch or a write to register CR3.
+	 */
+	movl	$(X86_CR4_PAE | X86_CR4_PGE), %ecx
+	movq	%rcx, %cr4
+
+	/* Setup early boot stage 4 level pagetables. */
+	addq	phys_base(%rip), %rax
+
+	movq	%rax, %cr3
+
+	movq	$2f, %rax
+	jmp	*%rax
+2:
+
 	movq	$(init_level4_pgt - __START_KERNEL_map), %rax
 1:
 

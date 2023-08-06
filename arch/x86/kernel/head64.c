@@ -150,7 +150,7 @@ asmlinkage __visible void __init x86_64_start_kernel(char *real_mode_data)
 	cr4_init_shadow();
 
 	/* Clear its low-address identity-mapping */
-	reset_early_page_tables();
+	// reset_early_page_tables();
 
 	clear_bss();
 
