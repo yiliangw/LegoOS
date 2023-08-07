@@ -115,6 +115,16 @@ ENTRY(startup_64)
 	/* Fixup phys_base */
 	addq	%rbp, phys_base(%rip)
 
+	/*
+	 * Enable PAE mode and PGE
+	 *
+	 * PAE: must be set before entering IA-32e mode.
+	 * PGE: global pages are not flushed from the TLB on a
+	 *      task switch or a write to register CR3.
+	 */
+	movl	$(X86_CR4_PAE | X86_CR4_PGE), %ecx
+	movq	%rcx, %cr4
+
 	movq	$(early_level4_pgt - __START_KERNEL_map), %rax
 	jmp	1f
 
@@ -143,9 +153,6 @@ ENTRY(secondary_startup_64)
 	 * after the boot processor executes this code.
 	 */
 
-	movq	$(init_level4_pgt - __START_KERNEL_map), %rax
-1:
-
 	/*
 	 * Enable PAE mode and PGE
 	 *
@@ -155,6 +162,19 @@ ENTRY(secondary_startup_64)
 	 */
 	movl	$(X86_CR4_PAE | X86_CR4_PGE), %ecx
 	movq	%rcx, %cr4
+
+	movq	$(secondary_switchover_pgt - __START_KERNEL_map), %rax
+	/* Setup early boot stage 4 level pagetables. */
+	addq	phys_base(%rip), %rax
+
+	movq	%rax, %cr3
+
+	movq	$2f, %rax
+	jmp	*%rax
+2:
+
+	movq	$(init_level4_pgt - __START_KERNEL_map), %rax
+1:
 
 	/* Setup early boot stage 4 level pagetables. */
 	addq	phys_base(%rip), %rax
@@ -363,6 +383,9 @@ NEXT_PAGE(early_dynamic_pgts)
 	.fill	512*EARLY_DYNAMIC_PAGE_TABLES,8,0
 
 	.data
+NEXT_PAGE(secondary_switchover_pgt)
+	.fill	512,8,0
+
 NEXT_PAGE(init_level4_pgt)
 	.quad   level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
 	.org    init_level4_pgt + L4_PAGE_OFFSET*8, 0

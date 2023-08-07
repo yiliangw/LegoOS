@@ -6,5 +6,4 @@ qemu-system-x86_64  \
 	-m 4G -smp 4 \
 	-serial stdio \
 	-display none \
-	-d int,cpu_reset -D ./debug_qemu.log \
-	-s -S
+	-d int,cpu_reset -D ./qemu.log
