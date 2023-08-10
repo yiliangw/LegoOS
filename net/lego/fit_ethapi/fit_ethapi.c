@@ -44,23 +44,26 @@ int ethapi_get_node_id(void)
 
 int lego_eth_init(void *unused)
 {
-    int err;
-    
-    err = fit_init_e1000_netif();
-    if (err) {
-        pr_err("Ehernet FIT: Failed to init netif\n");
-        return err;
-    }
+    int ret;
 
-    err = ethapi_establish_conn(1, CONFIG_FIT_LOCAL_ID);
-    if (err) {
+    ret = fit_init();
+    if (ret)
+        goto err; 
+    
+    ret = ethapi_establish_conn(1, CONFIG_FIT_LOCAL_ID);
+    if (ret) {
         pr_err("Ehernet FIT: Failed to establish connection\n");
-        return err;
+        goto err;
     }
 
 	complete(&eth_fit_init_done);
 
     fit_dispatch();
-
+    
+    BUG();
 	return 0;
+
+err:
+    pr_err("Ethernet FIT exit: %d\n", ret);
+    return ret;
 }

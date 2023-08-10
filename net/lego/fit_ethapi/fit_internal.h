@@ -15,13 +15,8 @@
 #define FIT_INFO(fmt, ...) \
     pr_info("Ethernet FIT: " fmt, ##__VA_ARGS__)
 
-
 #define FIT_PANIC(fmt, ...) \
     panic("Ethernet FIT: " fmt, ##__VA_ARGS__)
-
-#ifndef MIN()
-#define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
-#endif
 
 #define ARP_TMR_INTERVAL_MS     ARP_TMR_INTERVAL
 #define IP_TMR_INTERVAL_MS      IP_TMR_INTERVAL
@@ -32,16 +27,42 @@
 #define FIT_NUM_SEND_HANDLE      32
 #define FIT_NUM_RECV_HANDLE      32
 
+/** 
+ * @defgroup fit_network_types FIT Types over Network
+ * Data types which may be transmitted over the network should be defined 
+ * with specified length for portability.
+ * @{
+ */
+typedef s32 fit_node_id_t;
+typedef s32 fit_port_id_t;
 typedef u32 fit_seqnum_t;
+typedef u32 fit_msg_len_t;
 
-typedef struct {
-    int node_id;
+typedef u8 fit_msg_type_t;
+enum fit_msg_type {
+    FIT_CALL,
+    FIT_REPLY,
+    FIT_SEND
+};
+
+struct fit_rpc_id {
+    fit_node_id_t fit_node;
     fit_seqnum_t sequence_num;
 } __attribute__((packed)) fit_rpc_id_t;
 
+struct fit_msg_hdr {
+    fit_node_id_t src_node;
+    fit_node_id_t dst_node;
+    fit_port_id_t dst_port;
+    fit_msg_len_t length;
+    fit_msg_type_t type;
+    struct fit_rpc_id rpc_id;
+} __attribute__((packed));
+/** @} */ // end of group fit_network_types
+
 /* FIT sending handle */
 struct fit_s_handle {
-    fit_rpc_id_t id;
+    struct fit_rpc_id id;
     struct semaphore sema;
     void *ret_addr;
     int max_ret_size;
@@ -49,12 +70,22 @@ struct fit_s_handle {
 
 /* FIT receiving handle */
 struct fit_r_handle {
-    fit_rpc_id_t rpc_id;
+    struct fit_rpc_id rpc_id;
 };
+
+struct fit_context;
+typedef void (*fit_input_cb_t)(
+    struct fit_context *ctx, 
+    fit_node_id_t src_node, 
+    fit_port_id_t dst_port, 
+    fit_msg_type_t msg_type, 
+    struct fit_rpc_id *rpc_id, 
+    void *msg, fit_msg_len_t len
+);
 
 struct fit_context {
     /* Identity */
-    int node_id;
+    fit_node_id_t id;
     /* lwIP UDP context */
     struct udp_pcb *pcb;
     struct ip_addr node_ip_addr[FIT_NUM_NODE];
@@ -70,24 +101,11 @@ struct fit_context {
     spinlock_t s_handles_lock;
     spinlock_t r_handles_lock;
 
-    
+    fit_input_cb_t input;
 };
 
-enum fit_msg_type {
-    FIT_REQUEST,
-    FIT_REPLY
-};
-
-struct fit_hdr {
-    fit_rpc_id_t rpc_id;
-    int src_node;
-    int dst_node;
-    int dst_port;
-} __attribute__((packed));
-
-
-int fit_init_e1000_netif(void);
-void fit_dispatch(void);
+int fit_init(void);
+int fit_dispatch(void);
 
 int fit_send_reply_timeout(int target_node, void *addr, int size, void *ret_addr,
         int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec);
