@@ -103,7 +103,6 @@ static void inline setup_nr_cpu_ids(void)
 
 static __initdata DEFINE_COMPLETION(kthreadd_done);
 
-void e1000_netif_test(void);
 /*
  * This is our first kernel thread (pid 1),f
  */
@@ -149,11 +148,6 @@ static int kernel_init(void *unused)
 	wait_for_completion(&eth_fit_init_done);
 	pr_info("eth_init_done\n");
 
-	e1000_netif_test();
-	while(1) {
-		set_current_state(TASK_INTERRUPTIBLE);
-		schedule();
-	}
 
 #elif defined(CONFIG_INFINIBAND_FIT)
 	init_socket();
