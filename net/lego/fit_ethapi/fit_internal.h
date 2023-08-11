@@ -10,6 +10,8 @@
 
 #define FIT_ERR(fmt, ...) \
     pr_err("Ethernet FIT: " fmt, ##__VA_ARGS__)
+#define FIT_WARN(fmt, ...) \
+    pr_warn("Ethernet FIT: " fmt, ##__VA_ARGS__)
 #define FIT_DEBUG(fmt, ...) \
     pr_debug("Ethernet FIT: " fmt, ##__VA_ARGS__)
 #define FIT_INFO(fmt, ...) \
@@ -24,8 +26,7 @@
 
 #define FIT_UDP_PORT    6000U
 
-#define FIT_NUM_SEND_HANDLE      32
-#define FIT_NUM_RECV_HANDLE      32
+#define FIT_NUM_HANDLE      32
 
 /** 
  * @defgroup fit_network_types FIT Types over Network
@@ -37,17 +38,20 @@ typedef s32 fit_node_id_t;
 typedef s32 fit_port_id_t;
 typedef u32 fit_seqnum_t;
 typedef u32 fit_msg_len_t;
-
+typedef u32 fit_local_id_t;
 typedef u8 fit_msg_type_t;
 enum fit_msg_type {
-    FIT_CALL,
-    FIT_REPLY,
-    FIT_SEND
+    FIT_MSG_CALL = 1,
+    FIT_MSG_REPLY,
+    FIT_MSG_SEND
 };
 
 struct fit_rpc_id {
-    fit_node_id_t fit_node;
-    fit_seqnum_t sequence_num;
+    fit_node_id_t   fit_node;
+    fit_seqnum_t    sequence_num;
+    /* Provide extra information to locate the handle
+       at the requesting node side */
+    fit_local_id_t  local_id; 
 } __attribute__((packed)) fit_rpc_id_t;
 
 struct fit_msg_hdr {
@@ -60,17 +64,46 @@ struct fit_msg_hdr {
 } __attribute__((packed));
 /** @} */ // end of group fit_network_types
 
-/* FIT sending handle */
-struct fit_s_handle {
-    struct fit_rpc_id id;
-    struct semaphore sema;
-    void *ret_addr;
-    int max_ret_size;
+/**
+ * @brief FIT handle types
+ * 
+ * @note There is no REPLY handle type. RECV_CALL is used for fit_call.
+ */
+enum fit_handle_type {
+    FIT_HANDLE_CALL = 1,
+    FIT_HANDLE_SEND,        
+    FIT_HANDLE_RECV_CALL,   /* When the received message is a call */
+    FIT_HANDLE_RECV_SEND,   /* When the received message is a send */
 };
-
-/* FIT receiving handle */
-struct fit_r_handle {
-    struct fit_rpc_id rpc_id;
+struct fit_handle {
+    struct fit_rpc_id id;
+    struct semaphore sem;
+    struct list_head que_node; 
+    enum fit_handle_type type;
+    int errno;
+    union {
+        struct {
+            void *out_addr;
+            size_t out_len;
+            void *in_addr;
+            size_t max_in_len;
+            size_t in_len;
+        } call;
+        struct {
+            void *out_addr;
+            size_t out_len;
+        } send;
+        struct {
+            void *in_addr;
+            size_t in_len;
+            void *out_addr;
+            size_t out_len;
+        } recvcall;
+        struct {
+            void *in_addr;
+            size_t in_len;
+        } recvsend;
+    };
 };
 
 struct fit_context;
@@ -94,12 +127,9 @@ struct fit_context {
     fit_seqnum_t sequence_num;
     spinlock_t sequence_num_lock;
     /* RPC handles */
-    struct fit_s_handle s_handles[FIT_NUM_SEND_HANDLE];
-    struct fit_r_handle r_handles[FIT_NUM_RECV_HANDLE];
-    unsigned long s_handles_bitmap[(FIT_NUM_SEND_HANDLE + BITS_PER_LONG - 1) / BITS_PER_LONG];
-    unsigned long r_handles_bitmap[(FIT_NUM_RECV_HANDLE + BITS_PER_LONG - 1) / BITS_PER_LONG];
-    spinlock_t s_handles_lock;
-    spinlock_t r_handles_lock;
+    struct fit_handle handles[FIT_NUM_HANDLE];
+    unsigned long handles_bitmap[(FIT_NUM_HANDLE + BITS_PER_LONG - 1) / BITS_PER_LONG];
+    spinlock_t handles_lock;
 
     fit_input_cb_t input;
 };

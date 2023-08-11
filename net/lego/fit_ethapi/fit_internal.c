@@ -298,8 +298,7 @@ ctx_init(ctx_t *ctx, fit_node_id_t node_id, u16 udp_port, fit_input_cb_t input)
 
     ctx->sequence_num = 0;
     spin_lock_init(&ctx->sequence_num_lock);
-    spin_lock_init(&ctx->s_handles_lock);
-    spin_lock_init(&ctx->r_handles_lock);
+    spin_lock_init(&ctx->handles_lock);
 
     ctx->input = input;
     return 0;
@@ -315,62 +314,31 @@ ctx_alloc_sequence_num(ctx_t *ctx)
     return num;
 }
 
-static struct fit_s_handle *
-ctx_alloc_send_handle(ctx_t *ctx)
+static struct fit_handle *
+ctx_alloc_handle(ctx_t *ctx)
 {
     unsigned int i;
-    struct fit_s_handle *handle;
-    spin_lock(&ctx->s_handles_lock);
-    i = find_first_zero_bit(ctx->s_handles_bitmap, FIT_NUM_SEND_HANDLE);
-    if (i == FIT_NUM_SEND_HANDLE)
+    struct fit_handle *handle;
+    spin_lock(&ctx->handles_lock);
+    i = find_first_zero_bit(ctx->handles_bitmap, FIT_NUM_HANDLE);
+    if (i == FIT_NUM_HANDLE)
         handle = NULL;
     else
-        handle = &ctx->s_handles[i];
-    spin_unlock(&ctx->s_handles_lock);
+        handle = &ctx->handles[i];
+    spin_unlock(&ctx->handles_lock);
     return handle;
 }
 
 static int
-ctx_free_send_handle(ctx_t *ctx, struct fit_s_handle *handle)
+ctx_free_rhandle(ctx_t *ctx, struct fit_handle *handle)
 {
-    int i = handle - ctx->s_handles;
-    if (i < 0 || i >= FIT_NUM_SEND_HANDLE) {
-        FIT_ERR("Invalid send handle\n");
-        return -EINVAL;
-    }
-    /* We do not need to lock here */
-    if (test_and_clear_bit(i, ctx->s_handles_bitmap) == 0) {
-        FIT_ERR("Freeing a free send handle\n");
-        return -EPERM;
-    }
-    return 0;
-}
-
-static struct fit_r_handle *
-ctx_alloc_recv_handle(ctx_t *ctx)
-{
-    unsigned int i;
-    struct fit_r_handle *handle;
-    spin_lock(&ctx->r_handles_lock);
-    i = find_first_zero_bit(ctx->r_handles_bitmap, FIT_NUM_RECV_HANDLE);
-    if (i == FIT_NUM_RECV_HANDLE)
-        handle = NULL;
-    else
-        handle = &ctx->r_handles[i];
-    spin_unlock(&ctx->r_handles_lock);
-    return handle;
-}
-
-static int
-ctx_free_recv_handle(ctx_t *ctx, struct fit_r_handle *handle)
-{
-    int i = handle - ctx->r_handles;
-    if (i < 0 || i >= FIT_NUM_RECV_HANDLE) {
+    int i = handle - ctx->handles;
+    if (i < 0 || i >= FIT_NUM_HANDLE) {
         FIT_ERR("Invalid recv handle\n");
         return -EINVAL;
     }
     /* We do not need to lock here */
-    if (test_and_clear_bit(i, ctx->r_handles_bitmap) == 0) {
+    if (test_and_clear_bit(i, ctx->handles_bitmap) == 0) {
         FIT_ERR("Freeing a free recv handle\n");
         return -EPERM;
     }
