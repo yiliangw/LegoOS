@@ -31,8 +31,6 @@ static struct netif e1000_netif;
 
 
 typedef struct fit_context ctx_t;
-
-static ctx_t fit_ctx;
 static struct timespec ts_etharp, ts_ipreass;
 
 /**
@@ -428,17 +426,22 @@ fit_init(void)
     if (ret)
         return ret;
 
-    /* Initialize the FIT context */
-    ret = ctx_init(&fit_ctx, MY_NODE_ID, FIT_UDP_PORT, handle_input);
-    if (ret)
-        return ret;
-
     /* Initialize the polling semaphore */
     sema_init(&fit_polling_sem, 0);
     
     FIT_INFO("Initalized\n");
     return 0;
 
+}
+
+int
+fit_add_context(ctx_t *ctx, fit_node_id_t node_id, u16 udp_port)
+{
+    int ret;
+    ret = ctx_init(ctx, node_id, udp_port, handle_input);
+    if (ret)
+        return ret;
+    return 0;
 }
 
 int

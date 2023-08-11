@@ -6,6 +6,8 @@
 
 __initdata DEFINE_COMPLETION(eth_fit_init_done);
 
+static struct fit_context fit_ctx; 
+
 // TODO: for mComponent
 int ethapi_establish_conn(int ib_port, int mynodeid)
 {
@@ -48,13 +50,9 @@ int lego_eth_init(void *unused)
 
     ret = fit_init();
     if (ret)
-        goto err; 
-    
-    ret = ethapi_establish_conn(1, CONFIG_FIT_LOCAL_ID);
-    if (ret) {
-        pr_err("Ehernet FIT: Failed to establish connection\n");
         goto err;
-    }
+
+    ret = fit_add_context(&fit_ctx, MY_NODE_ID, FIT_UDP_PORT); 
 
 	complete(&eth_fit_init_done);
 

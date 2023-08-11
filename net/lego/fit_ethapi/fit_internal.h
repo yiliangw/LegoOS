@@ -135,12 +135,9 @@ struct fit_context {
 };
 
 int fit_init(void);
+int fit_add_context(struct fit_context *ctx, fit_node_id_t node_id, u16 udp_port);
 int fit_dispatch(void);
 
-int fit_send_reply_timeout(int target_node, void *addr, int size, void *ret_addr,
-        int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec);
-int fit_receive_message(unsigned int designed_port, void *ret_addr,
-        int receive_size, uintptr_t *descriptor);
-int fit_reply_message(void *addr, int size, uintptr_t descriptor);
+
 
 #endif /* _INCLUDE_FIT_INTERNAL_H */
