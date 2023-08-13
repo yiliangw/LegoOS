@@ -2,6 +2,7 @@
 #define _INCLUDE_FIT_INTERNAL_H
 
 #include <lego/types.h>
+#include <lego/llist.h>
 #include <lego/semaphore.h>
 #include <lego/spinlock.h>
 #include <lego/time.h>
@@ -26,7 +27,8 @@
 
 #define FIT_UDP_PORT    6000U
 
-#define FIT_NUM_HANDLE      32
+#define FIT_NUM_HANDLE      32U
+#define FIT_NUM_CONTEXT     1U
 
 /** 
  * @defgroup fit_network_types FIT Types over Network
@@ -78,7 +80,7 @@ enum fit_handle_type {
 struct fit_handle {
     struct fit_rpc_id id;
     struct semaphore sem;
-    struct list_head que_node; 
+    struct llist_node qnode; /* Anchor for input/output queue */
     enum fit_handle_type type;
     int errno;
     union {
@@ -86,7 +88,6 @@ struct fit_handle {
             void *out_addr;
             size_t out_len;
             void *in_addr;
-            size_t max_in_len;
             size_t in_len;
         } call;
         struct {
@@ -130,6 +131,9 @@ struct fit_context {
     struct fit_handle handles[FIT_NUM_HANDLE];
     unsigned long handles_bitmap[(FIT_NUM_HANDLE + BITS_PER_LONG - 1) / BITS_PER_LONG];
     spinlock_t handles_lock;
+
+    struct llist_head output_q;
+    struct llist_head input_q;
 
     fit_input_cb_t input;
 };

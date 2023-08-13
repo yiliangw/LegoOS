@@ -1,9 +1,7 @@
-#include "lego/bitops.h"
-#include "lego/bug.h"
-#include "lego/errno.h"
-#include "lego/fit_ibapi.h"
-#include "lego/spinlock.h"
-#include "net/lwip/arch.h"
+#include <lego/bitops.h>
+#include <lego/bug.h>
+#include <lego/errno.h>
+#include <lego/spinlock.h>
 #include <lego/semaphore.h>
 #include <lego/time.h>
 #include <lego/jiffies.h>
@@ -14,6 +12,8 @@
 #include <lego/kthread.h>
 #include <lego/types.h>
 #include <lego/bitmap.h>
+#include <lego/llist.h>
+#include <lego/fit_ibapi.h>
 
 #include <net/netif/etharp.h>
 #include <net/e1000.h>
@@ -26,21 +26,31 @@
 
 #include "fit_internal.h"
 
-static const char e1000_netif_name[] = "en";
-static struct netif e1000_netif;
-
-
 typedef struct fit_context ctx_t;
-static struct timespec ts_etharp, ts_ipreass;
 
+const char e1000_netif_name[] = "en";
 /**
- * @brief The semaphore used to wake up the FIT polling thread
+ * @brief Context of the FIT polling thread
  *
- * Both the input context (i.e. the E1000 interrupt handler) and
- * the output context (i.e. the FIT API) notify the FIT polling thread
- * through this semaphore.
+ * There is just one FIT polling thread in the system. However, this
+ * polling thread can serve multiple FIT contexts. Each FIT context
+ * represents a virtual FIT node with a unique node ID.
  */
-static struct semaphore fit_polling_sem;
+static struct {
+    ctx_t *ctx[FIT_NUM_CONTEXT];
+    size_t num_ctx;
+    struct timespec ts_etharp, ts_ipreass;
+    struct netif e1000_netif;
+    /**
+     * @brief The semaphore used to wake up the FIT polling thread
+     *
+     * Both the input context (i.e. the E1000 interrupt handler) and
+     * the output context (i.e. the FIT API) notify the FIT polling thread
+     * through this semaphore.
+     */
+    struct semaphore polling_sem;
+} fit_polling_ctx;
+#define FPC (&fit_polling_ctx)
 
 
 static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
@@ -48,6 +58,21 @@ static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
     return (t1->tv_sec - t2->tv_sec) * 1000 + (t1->tv_nsec - t2->tv_nsec) / 1000000;
 }
 
+/**
+ * @brief Poke the FIT polling thread to work on input/output
+ *
+ * @note This function is called both in the context of E1000 interrupt 
+ *       and in the context of FIT clinet threads.
+ * @note This function should be called after the corresponding data
+ *       is prepared. For example, it should not be called before the
+ *       output is queued in the output queue of a FIT context.
+ */
+static void __poke_polling_thread(void)
+{
+    if (&FPC->polling_sem.count > 0)
+        return;
+    up(&FPC->polling_sem);
+}
 
 /************************************************************************
  * @defgroup interface_lwip_e1000 LwIP's interface with E1000 driver
@@ -61,7 +86,7 @@ static void
 e1000if_input_callback(void)
 {
     FIT_DEBUG("E1000 interrupt detected\n");
-    up(&fit_polling_sem);
+    __poke_polling_thread();
 }
 
 static int
@@ -168,7 +193,7 @@ e1000if_init(void)
     }
 
     /* se should use ethernet_input here to handle Ethernet headers */
-    if (netif_add(&e1000_netif, &ipaddr, &netmask, &gateway, NULL, e1000if_init_cb, ethernet_input) == NULL) {
+    if (netif_add(&FPC->e1000_netif, &ipaddr, &netmask, &gateway, NULL, e1000if_init_cb, ethernet_input) == NULL) {
         FIT_ERR("Failed to add netif\n");
         goto ip_err;
     }
@@ -178,11 +203,11 @@ e1000if_init(void)
     FIT_INFO("netif netmask: %s\n", CONFIG_E1000_NETIF_MASK);
     FIT_INFO("netif gateway: %s\n", CONFIG_E1000_NETIF_GATEWAY);
     FIT_INFO("netif mac: %02x:%02x:%02x:%02x:%02x:%02x\n",
-		e1000_netif.hwaddr[0], e1000_netif.hwaddr[1], e1000_netif.hwaddr[2],
-        e1000_netif.hwaddr[3], e1000_netif.hwaddr[4], e1000_netif.hwaddr[5]);
+		FPC->e1000_netif.hwaddr[0], FPC->e1000_netif.hwaddr[1], FPC->e1000_netif.hwaddr[2],
+        FPC->e1000_netif.hwaddr[3], FPC->e1000_netif.hwaddr[4], FPC->e1000_netif.hwaddr[5]);
 
-    netif_set_default(&e1000_netif);
-    netif_set_up(&e1000_netif);
+    netif_set_default(&FPC->e1000_netif);
+    netif_set_up(&FPC->e1000_netif);
 
     /* Let the E1000 driver notify the polling thread with fit_polling_sema */
     e1000_input_callback = e1000if_input_callback;
@@ -298,6 +323,9 @@ ctx_init(ctx_t *ctx, fit_node_id_t node_id, u16 udp_port, fit_input_cb_t input)
     spin_lock_init(&ctx->sequence_num_lock);
     spin_lock_init(&ctx->handles_lock);
 
+    init_llist_head(&ctx->output_q);
+    init_llist_head(&ctx->input_q);
+
     ctx->input = input;
     return 0;
 }
@@ -313,16 +341,20 @@ ctx_alloc_sequence_num(ctx_t *ctx)
 }
 
 static struct fit_handle *
-ctx_alloc_handle(ctx_t *ctx)
+ctx_alloc_handle(ctx_t *ctx, fit_local_id_t *local_id)
 {
     unsigned int i;
     struct fit_handle *handle;
     spin_lock(&ctx->handles_lock);
     i = find_first_zero_bit(ctx->handles_bitmap, FIT_NUM_HANDLE);
-    if (i == FIT_NUM_HANDLE)
+    if (i == FIT_NUM_HANDLE) {
         handle = NULL;
-    else
+        *local_id = 0;
+    }
+    else {
         handle = &ctx->handles[i];
+        *local_id = i;
+    }
     spin_unlock(&ctx->handles_lock);
     return handle;
 }
@@ -371,7 +403,7 @@ poll_pending_input(void)
 
         FIT_DEBUG("Received packet (len=%d)\n", p->len);
         /* input has been initialized to ethernet_input */
-        e1000_netif.input(p, &e1000_netif);
+        FPC->e1000_netif.input(p, &FPC->e1000_netif);
     }
 }
 
@@ -398,12 +430,12 @@ poll_lwip(void)
     struct timespec ts;
 
     ts = current_kernel_time();
-    if (__timespec_diff_ms(&ts, &ts_etharp) >= ARP_TMR_INTERVAL_MS) {
-        ts_etharp = ts;
+    if (__timespec_diff_ms(&ts, &FPC->ts_etharp) >= ARP_TMR_INTERVAL_MS) {
+        FPC->ts_etharp = ts;
         etharp_tmr();
     }
-    if (__timespec_diff_ms(&ts, &ts_ipreass) >= IP_TMR_INTERVAL_MS) {
-        ts_ipreass = ts;
+    if (__timespec_diff_ms(&ts, &FPC->ts_ipreass) >= IP_TMR_INTERVAL_MS) {
+        FPC->ts_ipreass = ts;
         ip_reass_tmr();
     }
 }
@@ -427,7 +459,7 @@ fit_init(void)
         return ret;
 
     /* Initialize the polling semaphore */
-    sema_init(&fit_polling_sem, 0);
+    sema_init(&FPC->polling_sem, 0);
     
     FIT_INFO("Initalized\n");
     return 0;
@@ -438,9 +470,17 @@ int
 fit_add_context(ctx_t *ctx, fit_node_id_t node_id, u16 udp_port)
 {
     int ret;
+
+    if (FPC->num_ctx >= FIT_NUM_CONTEXT) {
+        FIT_WARN("Only support %u contexts\n", FIT_NUM_CONTEXT);
+        return -ENOMEM;
+    }
+
     ret = ctx_init(ctx, node_id, udp_port, handle_input);
     if (ret)
         return ret;
+
+    FPC->ctx[FPC->num_ctx++] = ctx;
     return 0;
 }
 
@@ -449,15 +489,13 @@ fit_dispatch(void)
 {
     FIT_INFO("Dispatched\n");
 
-    ts_etharp = ts_ipreass = current_kernel_time();
+    FPC->ts_etharp = FPC->ts_ipreass = current_kernel_time();
 
     while (1) {
-        down(&fit_polling_sem);
-        /* 
-         * Down the semahphore to 0 before polling the messages to prevent
-         * missing any new one
-         */
-        while(down_trylock(&fit_polling_sem) == 0);
+        down(&FPC->polling_sem);
+        /* Consume the semahphore to 0 before polling the messages so that
+          we will not miss any new notification. */
+        while(down_trylock(&FPC->polling_sem) == 0);
         
         poll_pending_input();
         poll_pending_output();
