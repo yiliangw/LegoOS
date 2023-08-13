@@ -2,7 +2,6 @@
 #define _INCLUDE_FIT_INTERNAL_H
 
 #include <lego/types.h>
-#include <lego/llist.h>
 #include <lego/semaphore.h>
 #include <lego/spinlock.h>
 #include <lego/time.h>
@@ -36,8 +35,8 @@
  * with specified length for portability.
  * @{
  */
-typedef s32 fit_node_id_t;
-typedef s32 fit_port_id_t;
+typedef s32 fit_node_t;
+typedef s32 fit_port_t;
 typedef u32 fit_seqnum_t;
 typedef u32 fit_msg_len_t;
 typedef u32 fit_local_id_t;
@@ -49,7 +48,7 @@ enum fit_msg_type {
 };
 
 struct fit_rpc_id {
-    fit_node_id_t   fit_node;
+    fit_node_t   fit_node;
     fit_seqnum_t    sequence_num;
     /* Provide extra information to locate the handle
        at the requesting node side */
@@ -57,9 +56,9 @@ struct fit_rpc_id {
 } __attribute__((packed)) fit_rpc_id_t;
 
 struct fit_msg_hdr {
-    fit_node_id_t src_node;
-    fit_node_id_t dst_node;
-    fit_port_id_t dst_port;
+    fit_node_t src_node;
+    fit_node_t dst_node;
+    fit_port_t dst_port;
     fit_msg_len_t length;
     fit_msg_type_t type;
     struct fit_rpc_id rpc_id;
@@ -79,10 +78,14 @@ enum fit_handle_type {
 };
 struct fit_handle {
     struct fit_rpc_id id;
+    struct fit_context *ctx;
+    fit_port_t local_port;
+    fit_node_t remote_node;
+    fit_port_t remote_port;
     struct semaphore sem;
-    struct llist_node qnode; /* Anchor for input/output queue */
-    enum fit_handle_type type;
+    struct list_head qnode; /* Anchor for input/output queue */
     int errno;
+    enum fit_handle_type type;
     union {
         struct {
             void *out_addr;
@@ -110,8 +113,8 @@ struct fit_handle {
 struct fit_context;
 typedef void (*fit_input_cb_t)(
     struct fit_context *ctx, 
-    fit_node_id_t src_node, 
-    fit_port_id_t dst_port, 
+    fit_node_t src_node, 
+    fit_port_t dst_port, 
     fit_msg_type_t msg_type, 
     struct fit_rpc_id *rpc_id, 
     void *msg, fit_msg_len_t len
@@ -119,7 +122,7 @@ typedef void (*fit_input_cb_t)(
 
 struct fit_context {
     /* Identity */
-    fit_node_id_t id;
+    fit_node_t id;
     /* lwIP UDP context */
     struct udp_pcb *pcb;
     struct ip_addr node_ip_addr[FIT_NUM_NODE];
@@ -132,14 +135,16 @@ struct fit_context {
     unsigned long handles_bitmap[(FIT_NUM_HANDLE + BITS_PER_LONG - 1) / BITS_PER_LONG];
     spinlock_t handles_lock;
 
-    struct llist_head output_q;
-    struct llist_head input_q;
+    struct list_head output_q;
+    spinlock_t output_q_lock;
+    struct list_head input_q;
+    spinlock_t input_q_lock;
 
     fit_input_cb_t input;
 };
 
 int fit_init(void);
-int fit_add_context(struct fit_context *ctx, fit_node_id_t node_id, u16 udp_port);
+struct fit_context *fit_new_context(fit_node_t node_id, u16 udp_port);
 int fit_dispatch(void);
 
 

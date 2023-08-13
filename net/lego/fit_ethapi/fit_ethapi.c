@@ -6,7 +6,7 @@
 
 __initdata DEFINE_COMPLETION(eth_fit_init_done);
 
-static struct fit_context fit_ctx; 
+static struct fit_context *fit_ctx; 
 
 // TODO: for mComponent
 int ethapi_establish_conn(int ib_port, int mynodeid)
@@ -52,7 +52,7 @@ int lego_eth_init(void *unused)
     if (ret)
         goto err;
 
-    ret = fit_add_context(&fit_ctx, MY_NODE_ID, FIT_UDP_PORT); 
+    fit_ctx = fit_new_context(MY_NODE_ID, FIT_UDP_PORT); 
 
 	complete(&eth_fit_init_done);
 

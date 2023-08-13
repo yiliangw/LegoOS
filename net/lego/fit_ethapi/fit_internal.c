@@ -12,7 +12,7 @@
 #include <lego/kthread.h>
 #include <lego/types.h>
 #include <lego/bitmap.h>
-#include <lego/llist.h>
+#include <lego/list.h>
 #include <lego/fit_ibapi.h>
 
 #include <net/netif/etharp.h>
@@ -37,7 +37,7 @@ const char e1000_netif_name[] = "en";
  * represents a virtual FIT node with a unique node ID.
  */
 static struct {
-    ctx_t *ctx[FIT_NUM_CONTEXT];
+    ctx_t ctxs[FIT_NUM_CONTEXT];
     size_t num_ctx;
     struct timespec ts_etharp, ts_ipreass;
     struct netif e1000_netif;
@@ -228,7 +228,7 @@ ip_err:
  * @{
  ***********************************************************************/
 static int
-lwipif_output(ctx_t *ctx, int dst_node, int dst_port, 
+lwipif_output(ctx_t *ctx, fit_node_t dst_node, fit_port_t dst_port, 
     enum fit_msg_type type, struct fit_rpc_id *rpc_id, void *msg, size_t len)
 {
     struct pbuf *p;
@@ -300,7 +300,7 @@ lwipif_input_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
  * @{
  ************************************************************************/
 static int
-ctx_init(ctx_t *ctx, fit_node_id_t node_id, u16 udp_port, fit_input_cb_t input)
+ctx_init(ctx_t *ctx, fit_node_t node_id, u16 udp_port, fit_input_cb_t input)
 {
     memset(ctx, 0, sizeof(ctx_t));
     ctx->id = node_id;
@@ -321,10 +321,13 @@ ctx_init(ctx_t *ctx, fit_node_id_t node_id, u16 udp_port, fit_input_cb_t input)
 
     ctx->sequence_num = 0;
     spin_lock_init(&ctx->sequence_num_lock);
+
     spin_lock_init(&ctx->handles_lock);
 
-    init_llist_head(&ctx->output_q);
-    init_llist_head(&ctx->input_q);
+    INIT_LIST_HEAD(&ctx->input_q);
+    INIT_LIST_HEAD(&ctx->output_q);
+    spin_lock_init(&ctx->input_q_lock);
+    spin_lock_init(&ctx->output_q_lock);
 
     ctx->input = input;
     return 0;
@@ -374,6 +377,43 @@ ctx_free_rhandle(ctx_t *ctx, struct fit_handle *handle)
     }
     return 0;
 }
+
+static int
+ctx_enque_input(ctx_t *ctx, struct fit_handle *handle)
+{
+    spin_lock(&ctx->input_q_lock);
+    list_add_tail(&ctx->input_q, &handle->qnode);
+    spin_unlock(&ctx->input_q_lock);
+    return 0;
+}
+
+static int
+ctx_enque_output(ctx_t *ctx, struct fit_handle *handle)
+{
+    spin_lock(&ctx->output_q_lock);
+    list_add_tail(&ctx->output_q, &handle->qnode);
+    spin_unlock(&ctx->output_q_lock);
+    return 0;
+}
+
+/**
+ * Concatenate all the handles in the input queue to the specified head.
+ */
+static void
+ctx_deque_all_input(ctx_t *ctx, struct list_head *head)
+{
+    spin_lock(&ctx->input_q_lock);
+    list_splice_init(&ctx->input_q, head);
+    spin_unlock(&ctx->input_q_lock);
+}
+
+static void
+ctx_deque_all_output(ctx_t *ctx, struct list_head *head)
+{
+    spin_lock(&ctx->output_q_lock);
+    list_splice_init(&ctx->output_q, head);
+    spin_unlock(&ctx->output_q_lock);
+}
 /************************************************************************
  @} */ // end of fit_ctx_utils
 
@@ -407,6 +447,15 @@ poll_pending_input(void)
     }
 }
 
+static int
+do_output_call(struct fit_handle *hdl)
+{
+    int ret;
+    ret = lwipif_output(hdl->ctx, hdl->remote_node, hdl->remote_port,
+        FIT_MSG_CALL, &hdl->id, hdl->call.out_addr, hdl->call.out_len);
+    return ret;
+}
+
 /**
  * @brief Poll the pending output messages from the FIT API layer
  * 
@@ -416,7 +465,33 @@ poll_pending_input(void)
 static void
 poll_pending_output(void)
 {
-    // TODO:
+    int i, ret;
+
+    for (i = 0; i < FPC->num_ctx; i++) {
+        /* For each context */
+        ctx_t *ctx;
+        struct list_head outq;
+        struct fit_handle *hdl;
+
+        ctx = &FPC->ctxs[i];
+        INIT_LIST_HEAD(&outq);
+        ctx_deque_all_output(ctx, &outq);
+        list_for_each_entry(hdl, &outq, qnode) {
+            /* For each message */
+            switch(hdl->type) {
+                case FIT_HANDLE_CALL:
+                    ret = do_output_call(hdl);
+                    break;
+                case FIT_HANDLE_RECV_CALL: // TODO:
+                case FIT_HANDLE_SEND: // TODO:
+                default:
+                    ret = -EINVAL;
+                    FIT_PANIC("Output for handle type %d not implemented.\n", hdl->type);
+            }
+            if (ret)
+                FIT_WARN("Output failed: %d\n", ret);
+        }                
+    }
 }
 
 /**
@@ -441,7 +516,7 @@ poll_lwip(void)
 }
 
 static void
-handle_input(ctx_t *ctx, fit_node_id_t node, fit_port_id_t port,
+handle_input(ctx_t *ctx, fit_node_t node, fit_port_t port,
     fit_msg_type_t type, struct fit_rpc_id *rpc_id, 
     void *msg, fit_msg_len_t len)
 {
@@ -466,22 +541,24 @@ fit_init(void)
 
 }
 
-int
-fit_add_context(ctx_t *ctx, fit_node_id_t node_id, u16 udp_port)
+ctx_t *
+fit_new_context(fit_node_t node_id, u16 udp_port)
 {
     int ret;
+    ctx_t *ctx;
 
     if (FPC->num_ctx >= FIT_NUM_CONTEXT) {
         FIT_WARN("Only support %u contexts\n", FIT_NUM_CONTEXT);
-        return -ENOMEM;
+        return NULL;
     }
+    ctx = &FPC->ctxs[FPC->num_ctx];
 
     ret = ctx_init(ctx, node_id, udp_port, handle_input);
     if (ret)
-        return ret;
+        return NULL;
 
-    FPC->ctx[FPC->num_ctx++] = ctx;
-    return 0;
+    FPC->num_ctx++;
+    return ctx;
 }
 
 int
@@ -508,3 +585,71 @@ fit_dispatch(void)
 
 /************************************************************************
  @} */ // end of group fit_polling
+
+
+/************************************************************************
+ * @defgroup fit_api FIT API Layer
+ * 
+ * These API functions run in the context of FIT client threads. The
+ * client threads interact with the FIT polling thread through the
+ * (sending) message queue and message handlers.
+ ************************************************************************/
+
+int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node, 
+    fit_port_t port, void *msg, size_t size, void *ret_addr, 
+    size_t *ret_size, size_t max_ret_size)
+{
+    int ret;
+    struct fit_handle *h;
+    struct fit_rpc_id *rpc_id;
+    fit_local_id_t local_id;
+    size_t sz;
+
+    h = ctx_alloc_handle(ctx, &local_id);
+    if (h == NULL) {
+        FIT_WARN("No available handle\n");
+        return -ENOMEM;
+    }
+    
+    /* Initialize the handle */
+    rpc_id = &h->id;
+    rpc_id->fit_node = ctx->id;
+    rpc_id->sequence_num = ctx_alloc_sequence_num(ctx);
+    rpc_id->local_id = local_id;
+    h->ctx = ctx;
+    h->local_port = local_port;
+    h->remote_node = node;
+    h->remote_port = port;
+    h->errno = 0;
+    h->type = FIT_HANDLE_CALL;
+    h->call.out_addr = msg;
+    h->call.out_len = size;
+
+    sz = 0;
+    /* Queue the message in in the output queue, poke the polling thread,
+       and wait on the semaphore. */
+    sema_init(&h->sem, 0);
+    ctx_enque_output(ctx, h);
+    __poke_polling_thread();
+    ret = down_interruptible(&h->sem);
+    if (ret) {
+        // TODO: Manage resources when theree is a interrupt
+        FIT_PANIC("Interrupted while waiting for reply\n");
+        goto out;
+    }
+
+    /* We have been notified by the FIT thread */
+    if (h->errno) {
+        ret = h->errno;
+        goto out;
+    }
+
+    sz = min(h->call.in_len, max_ret_size);
+    memcpy(ret_addr, h->call.in_addr, sz);
+    ret = 0;
+out:
+    *ret_size = sz;
+    return ret;
+}
+/************************************************************************
+ @} */ // end of group fit_api
