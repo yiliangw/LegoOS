@@ -144,6 +144,7 @@ struct fit_context {
     spinlock_t output_q_lock;
     struct list_head input_q;
     spinlock_t input_q_lock;
+    struct semaphore input_sem;
 
     fit_input_cb_t input;
 };

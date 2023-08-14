@@ -57,21 +57,40 @@ static struct {
 } fit_polling_ctx;
 #define FPC (&fit_polling_ctx)
 
-static int produce_free_pbuf(struct pbuf *pbuf)
+/**
+ * @brief Poke the FIT polling thread to work on input/output
+ *
+ * @note This function is called both in the context of E1000 interrupt 
+ *       and in the context of FIT clinet threads.
+ * @note This function should be called after the corresponding data
+ *       is prepared. For example, it should not be called before the
+ *       output is queued in the output queue of a FIT context.
+ */
+static void __poke_polling_thread(void)
+{
+    if (&FPC->polling_sem.count > 0)
+        return;
+    up(&FPC->polling_sem);
+}
+
+static void produce_free_pbuf(struct pbuf *pbuf)
 {
     int tail;
-
     while (1) {
         tail = atomic_read(&FPC->free_pbuf_tail);
-        if (tail == atomic_read(&FPC->free_pbuf_head) - 1) {
-            FIT_WARN("Run out of free pbuf slots\n");
-            return -ENOMEM;
+        if (tail == atomic_read(&FPC->free_pbuf_head) - 1) { /* Full */
+            FIT_WARN("Ran out of free pbuf slots\n");
+            /* Notify the polling thread to clean up */
+            __poke_polling_thread();
+            set_current_state(TASK_INTERRUPTIBLE);
+            schedule();
+        } else {
+            if (atomic_cmpxchg(&FPC->free_pbuf_tail, tail, 
+                (tail + 1) % FIT_NUM_FREE_PBUF) == tail)
+                break;
         }
-        if (atomic_cmpxchg(&FPC->free_pbuf_tail, tail, (tail + 1) % FIT_NUM_FREE_PBUF) == tail)
-            break;
     }
     FPC->free_pbuf[tail] = pbuf;
-    return 0;
 }
 
 /** 
@@ -94,22 +113,6 @@ static void consume_free_pbuf(void)
 static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
 {
     return (t1->tv_sec - t2->tv_sec) * 1000 + (t1->tv_nsec - t2->tv_nsec) / 1000000;
-}
-
-/**
- * @brief Poke the FIT polling thread to work on input/output
- *
- * @note This function is called both in the context of E1000 interrupt 
- *       and in the context of FIT clinet threads.
- * @note This function should be called after the corresponding data
- *       is prepared. For example, it should not be called before the
- *       output is queued in the output queue of a FIT context.
- */
-static void __poke_polling_thread(void)
-{
-    if (&FPC->polling_sem.count > 0)
-        return;
-    up(&FPC->polling_sem);
 }
 
 /************************************************************************
@@ -366,6 +369,8 @@ ctx_init(ctx_t *ctx, fit_node_t node_id, u16 udp_port, fit_input_cb_t input)
     spin_lock_init(&ctx->input_q_lock);
     spin_lock_init(&ctx->output_q_lock);
 
+    sema_init(&ctx->input_sem, 0);
+
     ctx->input = input;
     return 0;
 }
@@ -463,6 +468,7 @@ ctx_enque_input(ctx_t *ctx, struct fit_handle *handle)
     spin_lock(&ctx->input_q_lock);
     list_add_tail(&ctx->input_q, &handle->qnode);
     spin_unlock(&ctx->input_q_lock);
+    up(&ctx->input_sem);
     return 0;
 }
 
@@ -475,15 +481,18 @@ ctx_enque_output(ctx_t *ctx, struct fit_handle *handle)
     return 0;
 }
 
-/**
- * Concatenate all the handles in the input queue to the specified head.
- */
-static void
-ctx_deque_all_input(ctx_t *ctx, struct list_head *head)
+static int
+ctx_deque_input(ctx_t *ctx, struct fit_handle **phandle)
 {
+    struct fit_handle *hdl;
+    if (down_interruptible(&ctx->input_sem))
+        return -EINTR;
     spin_lock(&ctx->input_q_lock);
-    list_splice_init(&ctx->input_q, head);
+    hdl = list_first_entry(&ctx->input_q, struct fit_handle, qnode);
+    list_del_init(&hdl->qnode);
     spin_unlock(&ctx->input_q_lock);
+    *phandle = hdl;
+    return 0;
 }
 
 static void
@@ -595,11 +604,48 @@ poll_lwip(void)
 }
 
 static void
+handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
+    fit_port_t dst_port, struct fit_rpc_id *rpc_id, 
+    struct pbuf *pbuf, size_t data_off)
+{
+    struct fit_handle *hdl;
+    hdl = ctx_alloc_handle(ctx, rpc_id, 0);
+    if (hdl == NULL) {
+        FIT_WARN("Ran out of FIT handles.\n");
+        pbuf_free(pbuf);
+        return;
+    }
+    hdl->local_port = dst_port;
+    hdl->remote_node = node;
+    hdl->remote_port = port;
+    hdl->errno = 0;
+
+    hdl->type = FIT_HANDLE_RECV_CALL;
+    hdl->recvcall.in_pbuf = pbuf;
+    hdl->recvcall.in_off = data_off;
+
+    ctx_enque_input(ctx, hdl);
+}
+
+static void
 handle_input(ctx_t *ctx, fit_node_t node, fit_port_t port,
     fit_port_t dst_port, fit_msg_type_t type, struct fit_rpc_id *rpc_id,
-    struct pbuf *pbuf, size_t pbuf_off)
+    struct pbuf *pbuf, size_t data_off)
 {
-    // TODO:
+    switch(type) {
+    case FIT_MSG_CALL:
+        handle_input_call(ctx, node, port, dst_port, rpc_id, 
+            pbuf, data_off);
+        break;
+    case FIT_MSG_REPLY: // TODO:
+    case FIT_MSG_SEND: // TODO:
+        FIT_PANIC("input handler not implemented for message type %d\n",
+            type);
+    default:
+        FIT_ERR("Invalid message type %d\n", type);
+        pbuf_free(pbuf);
+        break;
+    }
 }
 
 int
@@ -692,7 +738,7 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
         FIT_WARN("No available handle\n");
         return -ENOMEM;
     }
-    
+
     /* Initialize the handle */
     h->local_port = local_port;
     h->remote_node = node;
@@ -703,7 +749,7 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
     h->call.out_len = size;
 
     sz = 0;
-    /* Queue the message in in the output queue, poke the polling thread,
+    /* Queue the message in the output queue, poke the polling thread,
        and wait on the semaphore. */
     sema_init(&h->sem, 0);
     ctx_enque_output(ctx, h);
@@ -713,24 +759,86 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
         /* TODO: Manage resources when there is a interrupt, especially
            for the in_pbuf */
         FIT_PANIC("Interrupted while waiting for reply\n");
-        goto out;
+        goto before_alloc_handle;
     }
 
     /* We have been notified by the FIT thread */
     if (h->errno) {
         ret = h->errno;
-        goto out;
+        goto after_alloc_handle;
     }
 
-    sz = min((size_t)h->call.in_pbuf->len, max_ret_size);
-    memcpy(ret_addr, h->call.in_pbuf->payload, sz);
+    sz = h->call.in_pbuf->len - h->call.in_off;
+    if (sz > max_ret_size) {
+        FIT_WARN("Buffer size is not enough\n");
+        sz = 0;
+        ret = -ENOMEM;
+        goto after_alloc_handle;
+    }
+
+    memcpy(ret_addr, h->call.in_pbuf->payload + h->call.in_off, sz);
     produce_free_pbuf(h->call.in_pbuf);
     ret = 0;
-out:
+after_alloc_handle:
     /* If there is an error, the FIT polling thread should
        free the pbuf if it exists. */
     ctx_free_handle(ctx, h);
+before_alloc_handle:
     *ret_size = sz;
+    return ret;
+}
+
+int
+fit_recv(ctx_t *ctx, fit_port_t recv_port, fit_node_t *node, 
+    fit_port_t *port, uintptr_t *handle, void *buf, size_t *sz, 
+    size_t buf_sz)
+{
+    // TODO: Receive from different ports
+    int ret;
+    struct fit_handle *hdl;
+    size_t input_sz;
+
+    ret = ctx_deque_input(ctx, &hdl);
+    if (ret) { /* Woke up by signal */
+        FIT_WARN("Interrupted while waiting for message\n");
+        goto err;
+    }
+
+    switch (hdl->type) {
+    case FIT_HANDLE_RECV_CALL:
+        input_sz = hdl->recvcall.in_pbuf->len - hdl->recvcall.in_off;
+        if (input_sz > buf_sz) {
+            FIT_WARN("Buffer size is not enough\n");
+            produce_free_pbuf(hdl->recvcall.in_pbuf);
+            ret = -ENOMEM;
+            goto err;
+        }
+        *node = hdl->remote_node;
+        *port = hdl->remote_port;
+        *handle = (uintptr_t)hdl;
+        *sz = input_sz;
+        memcpy(buf, hdl->recvcall.in_pbuf->payload + hdl->recvcall.in_off,
+            input_sz);
+        produce_free_pbuf(hdl->recvcall.in_pbuf);
+        /* Cannot free the handle here because the corresponding reply 
+           will depend on it */
+        break;
+    case FIT_HANDLE_RECV_SEND:
+        // TODO:
+        FIT_PANIC("Not implemented\n");
+        /* Can free the handle immediately since there is no reply */
+        break;
+    default:
+        FIT_PANIC("Invalid handle type(%d) in the input queue\n", 
+            hdl->type);
+    }
+
+    return 0;
+err:
+    *node = 0;
+    *port = 0;
+    *handle = 0;
+    *sz = 0;
     return ret;
 }
 /************************************************************************
