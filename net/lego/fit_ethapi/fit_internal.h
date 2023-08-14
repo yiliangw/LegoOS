@@ -60,6 +60,7 @@ struct fit_rpc_id {
 struct fit_msg_hdr {
     fit_node_t src_node;
     fit_node_t dst_node;
+    fit_port_t src_port;
     fit_port_t dst_port;
     fit_msg_len_t length;
     fit_msg_type_t type;
@@ -112,7 +113,8 @@ struct fit_handle {
 struct fit_context;
 typedef void (*fit_input_cb_t)(
     struct fit_context *ctx, 
-    fit_node_t src_node, 
+    fit_node_t src_node,
+    fit_port_t src_port,
     fit_port_t dst_port, 
     fit_msg_type_t msg_type, 
     struct fit_rpc_id *rpc_id, 

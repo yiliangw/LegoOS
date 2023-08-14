@@ -266,7 +266,7 @@ ip_err:
  * @{
  ***********************************************************************/
 static int
-lwipif_output(ctx_t *ctx, fit_node_t dst_node, fit_port_t dst_port, 
+lwipif_output(ctx_t *ctx, fit_port_t port, fit_node_t dst_node, fit_port_t dst_port, 
     enum fit_msg_type type, struct fit_rpc_id *rpc_id, void *msg, size_t len)
 {
     struct pbuf *p;
@@ -293,6 +293,7 @@ lwipif_output(ctx_t *ctx, fit_node_t dst_node, fit_port_t dst_port,
     hdr->type = type;
     hdr->src_node = ctx->id;
     hdr->dst_node = dst_node;
+    hdr->src_port = port;
     hdr->dst_port = dst_port;
 
     memcpy(p->payload, msg, len);
@@ -323,7 +324,7 @@ lwipif_input_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         return;
     }
 
-    ctx->input(ctx, hdr->src_node, hdr->dst_port, hdr->type, 
+    ctx->input(ctx, hdr->src_node, hdr->src_port, hdr->dst_port, hdr->type, 
         &hdr->rpc_id, p->payload+sizeof(struct fit_msg_hdr), hdr->length);    
 }
 
@@ -529,7 +530,7 @@ static int
 do_output_call(struct fit_handle *hdl)
 {
     int ret;
-    ret = lwipif_output(hdl->ctx, hdl->remote_node, hdl->remote_port,
+    ret = lwipif_output(hdl->ctx, hdl->local_port, hdl->remote_node, hdl->remote_port,
         FIT_MSG_CALL, &hdl->id, hdl->call.out_addr, hdl->call.out_len);
     return ret;
 }
