@@ -28,6 +28,7 @@
 
 #define FIT_NUM_HANDLE      32U
 #define FIT_NUM_CONTEXT     1U
+#define FIT_NUM_FREE_PBUF   64U
 
 /** 
  * @defgroup fit_network_types FIT Types over Network
@@ -90,22 +91,19 @@ struct fit_handle {
         struct {
             void *out_addr;
             size_t out_len;
-            void *in_addr;
-            size_t in_len;
+            struct pbuf *in_pbuf;
         } call;
         struct {
             void *out_addr;
             size_t out_len;
         } send;
         struct {
-            void *in_addr;
-            size_t in_len;
+            struct pbuf *in_pbuf;
             void *out_addr;
             size_t out_len;
         } recvcall;
         struct {
-            void *in_addr;
-            size_t in_len;
+            struct pbuf *in_pbuf;
         } recvsend;
     };
 };

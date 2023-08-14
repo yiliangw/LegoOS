@@ -41,6 +41,11 @@ static struct {
     size_t num_ctx;
     struct timespec ts_etharp, ts_ipreass;
     struct netif e1000_netif;
+    /* The free pbufs are produced by FIT client threads and consumed
+       by the FIT polling thread. */
+    struct pbuf *free_pbuf[FIT_NUM_FREE_PBUF];
+    atomic_t free_pbuf_head; /* Updated by the FIT polling thread */
+    atomic_t free_pbuf_tail; /* Updated by FIT client threads */
     /**
      * @brief The semaphore used to wake up the FIT polling thread
      *
@@ -52,6 +57,39 @@ static struct {
 } fit_polling_ctx;
 #define FPC (&fit_polling_ctx)
 
+static int produce_free_pbuf(struct pbuf *pbuf)
+{
+    int tail;
+
+    while (1) {
+        tail = atomic_read(&FPC->free_pbuf_tail);
+        if (tail == atomic_read(&FPC->free_pbuf_head) - 1) {
+            FIT_WARN("Run out of free pbuf slots\n");
+            return -ENOMEM;
+        }
+        if (atomic_cmpxchg(&FPC->free_pbuf_tail, tail, (tail + 1) % FIT_NUM_FREE_PBUF) == tail)
+            break;
+    }
+    FPC->free_pbuf[tail] = pbuf;
+    return 0;
+}
+
+/** 
+ * @note This function can only be called by the FIT polling thread.
+ */
+static void consume_free_pbuf(void)
+{
+    int tail, head;
+
+    head = atomic_read(&FPC->free_pbuf_head);
+    while ((tail = atomic_read(&FPC->free_pbuf_tail)) != head) {
+        while (head != tail) {
+            pbuf_free(FPC->free_pbuf[head]);
+            head = (head + 1) % FIT_NUM_FREE_PBUF;
+        }
+        atomic_set(&FPC->free_pbuf_head, head);
+    }
+}
 
 static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
 {
@@ -535,6 +573,10 @@ fit_init(void)
 
     /* Initialize the polling semaphore */
     sema_init(&FPC->polling_sem, 0);
+
+    /* Initialize the free pbuf list */
+    atomic_set(&FPC->free_pbuf_head, 0);
+    atomic_set(&FPC->free_pbuf_tail, 0);
     
     FIT_INFO("Initalized\n");
     return 0;
@@ -574,6 +616,7 @@ fit_dispatch(void)
           we will not miss any new notification. */
         while(down_trylock(&FPC->polling_sem) == 0);
         
+        consume_free_pbuf();
         poll_pending_input();
         poll_pending_output();
         poll_lwip();
@@ -612,11 +655,6 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
     }
     
     /* Initialize the handle */
-    rpc_id = &h->id;
-    rpc_id->fit_node = ctx->id;
-    rpc_id->sequence_num = ctx_alloc_sequence_num(ctx);
-    rpc_id->local_id = local_id;
-    h->ctx = ctx;
     h->local_port = local_port;
     h->remote_node = node;
     h->remote_port = port;
@@ -633,7 +671,8 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
     __poke_polling_thread();
     ret = down_interruptible(&h->sem);
     if (ret) {
-        // TODO: Manage resources when theree is a interrupt
+        /* TODO: Manage resources when there is a interrupt, especially
+           for the in_pbuf */
         FIT_PANIC("Interrupted while waiting for reply\n");
         goto out;
     }
@@ -644,8 +683,9 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
         goto out;
     }
 
-    sz = min(h->call.in_len, max_ret_size);
-    memcpy(ret_addr, h->call.in_addr, sz);
+    sz = min((size_t)h->call.in_pbuf->len, max_ret_size);
+    memcpy(ret_addr, h->call.in_pbuf->payload, sz);
+    produce_free_pbuf(h->call.in_pbuf);
     ret = 0;
 out:
     *ret_size = sz;
