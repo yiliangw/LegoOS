@@ -318,15 +318,13 @@ lwipif_input_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
 
     hdr = (struct fit_msg_hdr *) p->payload;
     if (hdr->dst_node != ctx->id) {
-        FIT_ERR("Received packet with wrong destination node\n");
+        FIT_WARN("Received packet with wrong destination node\n");
         pbuf_free(p);
         return;
     }
 
     ctx->input(ctx, hdr->src_node, hdr->dst_port, hdr->type, 
         &hdr->rpc_id, p->payload+sizeof(struct fit_msg_hdr), hdr->length);    
-
-    pbuf_free(p);
 }
 
 /************************************************************************
@@ -381,38 +379,80 @@ ctx_alloc_sequence_num(ctx_t *ctx)
     return num;
 }
 
+/**
+ * Alloc a handle for the specified RPC ID. If rpcid is NULL, 
+ * create a new RPC ID.
+ */
 static struct fit_handle *
-ctx_alloc_handle(ctx_t *ctx, fit_local_id_t *local_id)
+ctx_alloc_handle(ctx_t *ctx, struct fit_rpc_id *rpcid, int alloc_seqnum)
 {
     unsigned int i;
-    struct fit_handle *handle;
+    fit_seqnum_t seqnum;
+    struct fit_handle *hdl;
+    
     spin_lock(&ctx->handles_lock);
     i = find_first_zero_bit(ctx->handles_bitmap, FIT_NUM_HANDLE);
     if (i == FIT_NUM_HANDLE) {
-        handle = NULL;
-        *local_id = 0;
-    }
-    else {
-        handle = &ctx->handles[i];
-        *local_id = i;
+        FIT_WARN("Run out of FIT handles.\n");
+        hdl = NULL;
+    } else {
+        set_bit(i, ctx->handles_bitmap);
+        hdl = &ctx->handles[i];
     }
     spin_unlock(&ctx->handles_lock);
-    return handle;
+
+    if (hdl) {
+        memset(hdl, 0, sizeof(struct fit_handle));
+        hdl->ctx = ctx;
+        if (rpcid) {
+            hdl->id = *rpcid;
+        } else {
+            seqnum = alloc_seqnum ? ctx_alloc_sequence_num(ctx) : 0;
+            hdl->id.fit_node = ctx->id;
+            hdl->id.sequence_num = seqnum;
+            hdl->id.__local_id = i;
+        }
+    }
+    return hdl;
+}
+
+/**
+ * @warning This function does not lock handles_lock. 
+ */
+static struct fit_handle *
+ctx_find_handle(ctx_t *ctx, struct fit_rpc_id *rpcid)
+{
+    struct fit_handle *hdl;
+    size_t idx = rpcid->__local_id;
+    
+    if (idx >= FIT_NUM_HANDLE || !test_bit(idx, ctx->handles_bitmap))
+        return NULL;
+    hdl = &ctx->handles[idx];
+
+    /* Further check sequence number */
+    if (hdl->id.fit_node != rpcid->fit_node || 
+        hdl->id.sequence_num != rpcid->sequence_num)
+        return NULL;
+
+    return hdl;
 }
 
 static int
-ctx_free_rhandle(ctx_t *ctx, struct fit_handle *handle)
+ctx_free_handle(ctx_t *ctx, struct fit_handle *handle)
 {
-    int i = handle - ctx->handles;
-    if (i < 0 || i >= FIT_NUM_HANDLE) {
-        FIT_ERR("Invalid recv handle\n");
+    size_t idx = handle->id.__local_id;
+    
+    if (handle->ctx != ctx || idx >= FIT_NUM_HANDLE) {
+        FIT_ERR("Invalid handle\n");
         return -EINVAL;
     }
     /* We do not need to lock here */
-    if (test_and_clear_bit(i, ctx->handles_bitmap) == 0) {
+    handle->id.sequence_num = 0;
+    if (test_and_clear_bit(idx, ctx->handles_bitmap) == 0) {
         FIT_ERR("Freeing a free recv handle\n");
         return -EPERM;
     }
+
     return 0;
 }
 
@@ -644,11 +684,9 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
 {
     int ret;
     struct fit_handle *h;
-    struct fit_rpc_id *rpc_id;
-    fit_local_id_t local_id;
     size_t sz;
 
-    h = ctx_alloc_handle(ctx, &local_id);
+    h = ctx_alloc_handle(ctx, NULL, 1);
     if (h == NULL) {
         FIT_WARN("No available handle\n");
         return -ENOMEM;
@@ -688,6 +726,9 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
     produce_free_pbuf(h->call.in_pbuf);
     ret = 0;
 out:
+    /* If there is an error, the FIT polling thread should
+       free the pbuf if it exists. */
+    ctx_free_handle(ctx, h);
     *ret_size = sz;
     return ret;
 }

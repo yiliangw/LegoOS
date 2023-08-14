@@ -52,9 +52,10 @@ struct fit_rpc_id {
     fit_node_t   fit_node;
     fit_seqnum_t    sequence_num;
     /* Provide extra information to locate the handle
-       at the requesting node side */
-    fit_local_id_t  local_id; 
-} __attribute__((packed)) fit_rpc_id_t;
+       at the requesting node side. Should only accessed
+       by the ctx_ functions. */
+    fit_local_id_t  __local_id; 
+} __attribute__((packed));
 
 struct fit_msg_hdr {
     fit_node_t src_node;
@@ -83,7 +84,7 @@ struct fit_handle {
     fit_port_t local_port;
     fit_node_t remote_node;
     fit_port_t remote_port;
-    struct semaphore sem;
+    struct semaphore sem; /* Should always be initialized by the waiter */
     struct list_head qnode; /* Anchor for input/output queue */
     int errno;
     enum fit_handle_type type;
