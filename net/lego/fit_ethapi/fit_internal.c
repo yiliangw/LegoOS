@@ -1,3 +1,4 @@
+#include "net/lwip/arch.h"
 #include <lego/bitops.h>
 #include <lego/bug.h>
 #include <lego/errno.h>
@@ -544,6 +545,18 @@ do_output_call(struct fit_handle *hdl)
     return ret;
 }
 
+static int
+do_output_reply(struct fit_handle *hdl)
+{
+    int ret;
+    ret = lwipif_output(hdl->ctx, hdl->local_port, hdl->remote_node, hdl->remote_port,
+        FIT_MSG_REPLY, &hdl->id, hdl->recvcall.out_addr, hdl->recvcall.out_len);
+    hdl->errno = ret;
+    /* Notify the client of the reply sending */
+    up(&hdl->sem);
+    return ret;
+}
+
 /**
  * @brief Poll the pending output messages from the FIT API layer
  * 
@@ -570,7 +583,9 @@ poll_pending_output(void)
                 case FIT_HANDLE_CALL:
                     ret = do_output_call(hdl);
                     break;
-                case FIT_HANDLE_RECV_CALL: // TODO:
+                case FIT_HANDLE_RECV_CALL:
+                    ret = do_output_reply(hdl);
+                    break;
                 case FIT_HANDLE_SEND: // TODO:
                 default:
                     ret = -EINVAL;
@@ -821,7 +836,7 @@ fit_recv(ctx_t *ctx, fit_port_t recv_port, fit_node_t *node,
             input_sz);
         produce_free_pbuf(hdl->recvcall.in_pbuf);
         /* Cannot free the handle here because the corresponding reply 
-           will depend on it */
+           will depend on it. Do it in fit_reply(). */
         break;
     case FIT_HANDLE_RECV_SEND:
         // TODO:
@@ -839,6 +854,40 @@ err:
     *port = 0;
     *handle = 0;
     *sz = 0;
+    return ret;
+}
+
+int 
+fit_reply(ctx_t *ctx, uintptr_t handle, void *msg, size_t len)
+{
+    int ret;
+    struct fit_handle *hdl;
+
+    hdl = (struct fit_handle *)handle;
+    // TODO: Do some other check on the handle
+    if (hdl->ctx != ctx || hdl->type != FIT_HANDLE_RECV_CALL) {
+        FIT_ERR("Invalid handle\n");
+        return -EINVAL;
+    }
+
+    hdl->recvcall.out_addr = msg;
+    hdl->recvcall.out_len = len;
+
+    hdl->errno = 0;
+    sema_init(&hdl->sem, 0);
+    ctx_enque_output(ctx, hdl);
+    __poke_polling_thread();
+    ret = down_interruptible(&hdl->sem);
+    if (ret) {
+        // TODO: Manage resources when there is a interrupt.
+        FIT_PANIC("Interrupted while doing reply\n");
+        goto out;
+    }
+
+    /* Norified by the FIT polling thread */
+    ret = hdl->errno;
+out:
+    ctx_free_handle(ctx, hdl);
     return ret;
 }
 /************************************************************************
