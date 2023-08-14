@@ -18,6 +18,7 @@
 
 static inline void print_irq_desc(unsigned int irq, struct irq_desc *desc)
 {
+#ifdef DEBUG
 	printk("irq %d, desc: %p, depth: %d, count: %d, unhandled: %d\n",
 		irq, desc, desc->depth, desc->irq_count, desc->irqs_unhandled);
 	printk("->handle_irq():  %p, ", desc->handle_irq);
@@ -45,6 +46,7 @@ static inline void print_irq_desc(unsigned int irq, struct irq_desc *desc)
 	___PD(IRQS_INPROGRESS);
 	___PD(IRQS_DISABLED);
 	___PD(IRQS_MASKED);
+#endif
 }
 
 #undef ___P
