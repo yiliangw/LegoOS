@@ -540,8 +540,17 @@ static int
 do_output_call(struct fit_handle *hdl)
 {
     int ret;
-    ret = lwipif_output(hdl->ctx, hdl->local_port, hdl->remote_node, hdl->remote_port,
+    ret = lwipif_output(hdl->ctx, hdl->local_port,
+        hdl->remote_node, hdl->remote_port,
         FIT_MSG_CALL, &hdl->id, hdl->call.out_addr, hdl->call.out_len);
+    if (ret) {
+        hdl->errno = ret;
+        up(&hdl->sem); /* Notify the client of the failure */
+    }
+    /* Else, we should notify the client after the reception of the reply
+       or timeout */
+    /* TODO: Add timeout mechanism for call. For simplicity, we can 
+       start the counting after the polling thread doing the call */
     return ret;
 }
 
@@ -746,12 +755,13 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
 {
     int ret;
     struct fit_handle *h;
-    size_t sz;
+    size_t sz = 0;  /* Default value for failure */
 
     h = ctx_alloc_handle(ctx, NULL, 1);
     if (h == NULL) {
         FIT_WARN("No available handle\n");
-        return -ENOMEM;
+        ret = -ENOMEM;
+        goto before_alloc_handle;
     }
 
     /* Initialize the handle */
@@ -763,8 +773,7 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
     h->call.out_addr = msg;
     h->call.out_len = size;
 
-    sz = 0;
-    /* Queue the message in the output queue, poke the polling thread,
+    /* Enque the message to the output queue, poke the polling thread,
        and wait on the semaphore. */
     sema_init(&h->sem, 0);
     ctx_enque_output(ctx, h);
@@ -774,11 +783,13 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
         /* TODO: Manage resources when there is a interrupt, especially
            for the in_pbuf */
         FIT_PANIC("Interrupted while waiting for reply\n");
-        goto before_alloc_handle;
+        goto after_alloc_handle;
     }
 
     /* We have been notified by the FIT thread */
     if (h->errno) {
+        /* When there is an error, the possible pbuf should be freed by
+           the polling thread */
         ret = h->errno;
         goto after_alloc_handle;
     }
