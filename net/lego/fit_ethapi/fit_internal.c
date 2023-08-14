@@ -325,7 +325,7 @@ lwipif_input_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     }
 
     ctx->input(ctx, hdr->src_node, hdr->src_port, hdr->dst_port, hdr->type, 
-        &hdr->rpc_id, p->payload+sizeof(struct fit_msg_hdr), hdr->length);    
+        &hdr->rpc_id, p, sizeof(struct fit_msg_hdr));   
 }
 
 /************************************************************************
@@ -596,8 +596,8 @@ poll_lwip(void)
 
 static void
 handle_input(ctx_t *ctx, fit_node_t node, fit_port_t port,
-    fit_msg_type_t type, struct fit_rpc_id *rpc_id, 
-    void *msg, fit_msg_len_t len)
+    fit_port_t dst_port, fit_msg_type_t type, struct fit_rpc_id *rpc_id,
+    struct pbuf *pbuf, size_t pbuf_off)
 {
     // TODO:
 }

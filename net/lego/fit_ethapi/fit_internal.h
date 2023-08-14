@@ -94,6 +94,7 @@ struct fit_handle {
             void *out_addr;
             size_t out_len;
             struct pbuf *in_pbuf;
+            size_t in_off;
         } call;
         struct {
             void *out_addr;
@@ -101,11 +102,13 @@ struct fit_handle {
         } send;
         struct {
             struct pbuf *in_pbuf;
+            size_t in_off;
             void *out_addr;
             size_t out_len;
         } recvcall;
         struct {
             struct pbuf *in_pbuf;
+            size_t in_off;
         } recvsend;
     };
 };
@@ -118,7 +121,8 @@ typedef void (*fit_input_cb_t)(
     fit_port_t dst_port, 
     fit_msg_type_t msg_type, 
     struct fit_rpc_id *rpc_id, 
-    void *msg, fit_msg_len_t len
+    struct pbuf *pbuf,
+    size_t pbuf_off
 );
 
 struct fit_context {
