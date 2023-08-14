@@ -153,6 +153,16 @@ int fit_init(void);
 struct fit_context *fit_new_context(fit_node_t node_id, u16 udp_port);
 int fit_dispatch(void);
 
+int fit_call(struct fit_context *ctx, fit_node_t local_port, 
+    fit_node_t node, fit_port_t port, void *msg, size_t size, 
+    void *ret_addr, size_t *ret_size, size_t max_ret_size);
+
+int fit_recv(struct fit_context *ctx, fit_port_t recv_port, 
+    fit_node_t *node, fit_port_t *port, uintptr_t *handle, 
+    void *buf, size_t *sz, size_t buf_sz);
+
+int fit_reply(struct fit_context *ctx, uintptr_t handle, void *msg, 
+    size_t len);
 
 
 #endif /* _INCLUDE_FIT_INTERNAL_H */

@@ -148,6 +148,7 @@ int ethapi_send_reply_timeout(int target_node, void *addr, int size, void *ret_a
 int ethapi_receive_message(unsigned int designed_port, void *ret_addr,
         int receive_size, uintptr_t *descriptor);
 int ethapi_reply_message(void *addr, int size, uintptr_t descriptor);
+int ethapi_get_node_id(void);
 
 #define ibapi_reply_message(addr, size, descriptor) \
 	ethapi_reply_message(addr, size, descriptor)
