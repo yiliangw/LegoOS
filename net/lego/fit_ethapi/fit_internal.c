@@ -69,7 +69,7 @@ static struct {
  */
 static void __poke_polling_thread(void)
 {
-    if (&FPC->polling_sem.count > 0)
+    if (FPC->polling_sem.count > 0)
         return;
     up(&FPC->polling_sem);
 }
