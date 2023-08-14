@@ -123,13 +123,29 @@ int e1000_transmit(const void *addr, u16 len)
 	return 0;
 }
 
+static inline size_t __pending_reception(u32 rdt, u32 rdh)
+{
+	return (rdh + RX_DESC_NUM - rdt - 1) % RX_DESC_NUM;	
+}
+
 size_t e1000_pending_reception(void)
 {
 	u32 rdt, rdh;
-	
 	rdt = e1000[E1000_LOCATE(E1000_RDT)];
 	rdh = e1000[E1000_LOCATE(E1000_RDH)];
-	return (rdh > rdt) ? (rdh - rdt - 1) : (rdh + RX_DESC_NUM - rdt - 1);
+	return __pending_reception(rdt, rdh);
+}
+
+void e1000_clear_pending_reception(size_t num)
+{
+	u32 rdt, rdh;
+	size_t pending;
+	/* Notice that the head can keep being changed by the hardware */
+	rdh = e1000[E1000_LOCATE(E1000_RDH)];
+	rdt = e1000[E1000_LOCATE(E1000_RDT)];
+	pending = __pending_reception(rdt, rdh);
+	num = min(num, pending);
+	e1000[E1000_LOCATE(E1000_RDT)] = (rdt + num + RX_DESC_NUM) % RX_DESC_NUM;
 }
 
 int e1000_receive(void *buf, u16 *len)
