@@ -652,6 +652,42 @@ handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
 }
 
 static void
+handle_input_reply(ctx_t *ctx, fit_node_t node, fit_port_t port,
+    fit_port_t dst_port, struct fit_rpc_id *rpc_id, 
+    struct pbuf *pbuf, size_t data_off)
+{
+    struct fit_handle *hdl;
+    hdl = ctx_find_handle(ctx, rpc_id);
+    if (hdl == NULL) {
+        /* Regard as a delayed reply */
+        FIT_WARN("Cannot find the handle for the reply. Discarded.\n");
+        goto err;
+    }
+    if (hdl->type != FIT_HANDLE_CALL) {
+        FIT_WARN("Received a reply for a non-call handle. Discarded.\n");
+        goto err;
+    }
+    if (hdl->local_port != dst_port || hdl->remote_node != node || 
+        hdl->remote_port != port) {
+        FIT_WARN("Received a reply for a call with conflicting \
+            communication info. Discarded.\n");
+        goto err;
+    }
+    // TODO: Deal with scenarioes when we received duplicate replies
+    hdl->errno = 0;
+    hdl->call.in_pbuf = pbuf;
+    hdl->call.in_off = data_off;
+    /* We do not queue it in the input queue. Just notify the caller,
+       which will free the pbuf */
+    up(&hdl->sem);
+    return;
+
+err:
+    pbuf_free(pbuf);
+    return;
+}
+
+static void
 handle_input(ctx_t *ctx, fit_node_t node, fit_port_t port,
     fit_port_t dst_port, fit_msg_type_t type, struct fit_rpc_id *rpc_id,
     struct pbuf *pbuf, size_t data_off)
@@ -661,7 +697,9 @@ handle_input(ctx_t *ctx, fit_node_t node, fit_port_t port,
         handle_input_call(ctx, node, port, dst_port, rpc_id, 
             pbuf, data_off);
         break;
-    case FIT_MSG_REPLY: // TODO:
+    case FIT_MSG_REPLY:
+        handle_input_reply(ctx, node, port, dst_port, rpc_id, 
+            pbuf, data_off);
     case FIT_MSG_SEND: // TODO:
         FIT_PANIC("input handler not implemented for message type %d\n",
             type);
@@ -797,6 +835,7 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
     sz = h->call.in_pbuf->len - h->call.in_off;
     if (sz > max_ret_size) {
         FIT_WARN("Buffer size is not enough\n");
+        produce_free_pbuf(h->call.in_pbuf);
         sz = 0;
         ret = -ENOMEM;
         goto after_alloc_handle;
