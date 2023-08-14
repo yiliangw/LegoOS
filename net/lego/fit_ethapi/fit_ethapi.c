@@ -16,13 +16,6 @@ int ethapi_establish_conn(int ib_port, int mynodeid)
     return 0;
 }
 
-int ethapi_send_reply_imm(int target_node, void *addr, int size, void *ret_addr,
-        int max_ret_size, int if_use_ret_phys_addr)
-{
-    return ethapi_send_reply_timeout(target_node, addr, size, ret_addr, max_ret_size,
-            if_use_ret_phys_addr, FIT_MAX_TIMEOUT_SEC);
-}
-
 int ethapi_send_reply_timeout(int target_node, void *addr, int size, void *ret_addr,
         int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec)
 {
@@ -32,11 +25,19 @@ int ethapi_send_reply_timeout(int target_node, void *addr, int size, void *ret_a
         pr_warn("Do not support physical address\n");
         return -EINVAL;
     }
-    ret = fit_call(CTX, target_node, addr, 0, addr, size, ret_addr, &ret_size, max_ret_size);
+    ret = fit_call(CTX, FIT_NONE_PORT, target_node, FIT_NONE_PORT,
+        addr, size, ret_addr, &ret_size, max_ret_size);
     if (ret)
         return ret;
     else
         return ret_size;
+}
+
+int ethapi_send_reply_imm(int target_node, void *addr, int size, void *ret_addr,
+        int max_ret_size, int if_use_ret_phys_addr)
+{
+    return ethapi_send_reply_timeout(target_node, addr, size, ret_addr, max_ret_size,
+            if_use_ret_phys_addr, FIT_MAX_TIMEOUT_SEC);
 }
 
 int ethapi_receive_message(unsigned int designed_port, void *ret_addr,

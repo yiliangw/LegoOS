@@ -30,6 +30,8 @@
 #define FIT_NUM_CONTEXT     1U
 #define FIT_NUM_FREE_PBUF   64U
 
+#define FIT_NONE_PORT       -1
+
 /** 
  * @defgroup fit_network_types FIT Types over Network
  * Data types which may be transmitted over the network should be defined 
