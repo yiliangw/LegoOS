@@ -467,7 +467,7 @@ static int
 ctx_enque_input(ctx_t *ctx, struct fit_handle *handle)
 {
     spin_lock(&ctx->input_q_lock);
-    list_add_tail(&ctx->input_q, &handle->qnode);
+    list_add_tail(&handle->qnode, &ctx->input_q);
     spin_unlock(&ctx->input_q_lock);
     up(&ctx->input_sem);
     return 0;
@@ -477,7 +477,7 @@ static int
 ctx_enque_output(ctx_t *ctx, struct fit_handle *handle)
 {
     spin_lock(&ctx->output_q_lock);
-    list_add_tail(&ctx->output_q, &handle->qnode);
+    list_add_tail(&handle->qnode, &ctx->output_q);
     spin_unlock(&ctx->output_q_lock);
     return 0;
 }
@@ -768,7 +768,7 @@ fit_dispatch(void)
         consume_free_pbuf();
         poll_pending_input();
         poll_pending_output();
-        poll_lwip();
+        // poll_lwip();
     }
 
     BUG();
