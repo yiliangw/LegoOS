@@ -1,4 +1,3 @@
-#include "net/lwip/arch.h"
 #include <lego/bitops.h>
 #include <lego/bug.h>
 #include <lego/errno.h>
@@ -277,6 +276,7 @@ lwipif_output(ctx_t *ctx, fit_port_t port, fit_node_t dst_node, fit_port_t dst_p
     int ret;
     struct ip_addr *dst_ip;
     struct fit_msg_hdr *hdr;
+    const size_t hdr_len = sizeof(struct fit_msg_hdr);
 
     if (dst_node >= FIT_NUM_NODE) {
         FIT_ERR("Invalid node number\n");
@@ -284,8 +284,7 @@ lwipif_output(ctx_t *ctx, fit_port_t port, fit_node_t dst_node, fit_port_t dst_p
     }
     dst_ip = &ctx->node_ip_addr[dst_node];
 
-    p = pbuf_alloc(PBUF_TRANSPORT, len + sizeof(struct fit_msg_hdr), 
-        PBUF_RAM);
+    p = pbuf_alloc(PBUF_TRANSPORT, hdr_len + len, PBUF_RAM);
     if (p == NULL) {
         FIT_ERR("Failed to allocate pbuf\n");
         return -ENOMEM;
@@ -300,7 +299,7 @@ lwipif_output(ctx_t *ctx, fit_port_t port, fit_node_t dst_node, fit_port_t dst_p
     hdr->src_port = port;
     hdr->dst_port = dst_port;
 
-    memcpy(p->payload, msg, len);
+    memcpy(p->payload + hdr_len, msg, len);
     FIT_DEBUG("Sending packet\n");
     ret = udp_sendto(ctx->pcb, p, dst_ip, FIT_UDP_PORT);
     if (ret) {
@@ -700,6 +699,7 @@ handle_input(ctx_t *ctx, fit_node_t node, fit_port_t port,
     case FIT_MSG_REPLY:
         handle_input_reply(ctx, node, port, dst_port, rpc_id, 
             pbuf, data_off);
+        break;
     case FIT_MSG_SEND: // TODO:
         FIT_PANIC("input handler not implemented for message type %d\n",
             type);
