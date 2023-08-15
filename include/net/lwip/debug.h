@@ -79,17 +79,13 @@
  */
 
 #include <lego/printk.h>
-#if 0
-#define LWIP_DEBUGF(debug, fmt, ...) \
-	printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
-#define LWIP_DEBUGF(debug, message) pr_debug(message)
-#endif
+
 #define LWIP_DEBUGF(debug, message) do { \
                                if ( \
                                    ((debug) & LWIP_DBG_ON) && \
                                    ((debug) & LWIP_DBG_TYPES_ON) && \
                                    ((s16_t)((debug) & LWIP_DBG_MASK_LEVEL) >= LWIP_DBG_MIN_LEVEL)) { \
-                                 LWIP_PLATFORM_DIAG(message); \
+                                  printk message ; \
                                  if ((debug) & LWIP_DBG_HALT) { \
                                    while(1); \
                                  } \

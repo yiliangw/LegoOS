@@ -47,7 +47,9 @@ void *memcpy(void *dst, const void *src, size_t n);
 
 // Print error messages when we run out of memory
 #define LWIP_DEBUG	1
-#define TCP_DEBUG	LWIP_DBG_ON
+#define TCP_DEBUG	    LWIP_DBG_OFF
+#define IP_DEBUG        LWIP_DBG_OFF
+#define ETHARP_DEBUG    LWIP_DBG_OFF
 //#define MEMP_DEBUG	LWIP_DBG_ON
 #define SOCKETS_DEBUG	LWIP_DBG_ON
 //#define DBG_TYPES_ON	LWIP_DBG_ON
