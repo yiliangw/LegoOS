@@ -74,13 +74,12 @@ int lego_eth_init(void *unused)
 
     CTX = fit_new_context(MY_NODE_ID, FIT_UDP_PORT); 
 
-	complete(&eth_fit_init_done);
-
-    fit_dispatch();
+    ret = fit_dispatch();
+    if (ret)
+        goto err;
     
-    BUG();
+    complete(&eth_fit_init_done);
 	return 0;
-
 err:
     pr_err("Ethernet FIT exit: %d\n", ret);
     return ret;

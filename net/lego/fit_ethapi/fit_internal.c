@@ -710,6 +710,40 @@ handle_input(ctx_t *ctx, fit_node_t node, fit_port_t port,
     }
 }
 
+static
+fit_polling_thread_fn(void *_arg)
+{
+    if (pin_current_thread())
+        FIT_PANIC("Fail to pin FIT polling thread");
+
+    FPC->ts_etharp = FPC->ts_ipreass = current_kernel_time();
+
+    while (1) {
+        down(&FPC->polling_sem);
+        /* Consume the semahphore to 0 before polling the messages so that
+          we will not miss any new notification. */
+        while(down_trylock(&FPC->polling_sem) == 0);
+        
+        consume_free_pbuf();
+        poll_pending_input();
+        poll_pending_output();
+    }
+
+    BUG();
+    return -1;
+}
+
+/************************************************************************
+ @} */ // end of group fit_polling
+
+
+/************************************************************************
+ * @defgroup fit_init FIT Initialization
+ * 
+ * Called in the context to initialize FIT.
+ * @{
+ ************************************************************************/
+
 int
 fit_init(void)
 {
@@ -755,28 +789,13 @@ fit_new_context(fit_node_t node_id, u16 udp_port)
 int
 fit_dispatch(void)
 {
-    FIT_INFO("Dispatched\n");
-
-    FPC->ts_etharp = FPC->ts_ipreass = current_kernel_time();
-
-    while (1) {
-        down(&FPC->polling_sem);
-        /* Consume the semahphore to 0 before polling the messages so that
-          we will not miss any new notification. */
-        while(down_trylock(&FPC->polling_sem) == 0);
-        
-        consume_free_pbuf();
-        poll_pending_input();
-        poll_pending_output();
-        // poll_lwip();
-    }
-
-    BUG();
-    return -1;
+    kthread_run(fit_polling_thread_fn, NULL, "FIT-polling");
+    FIT_INFO("Dispatched FIT polling thread.\n");
+    return 0;
 }
 
 /************************************************************************
- @} */ // end of group fit_polling
+ @} */ // end of group fit_initialization
 
 
 /************************************************************************
