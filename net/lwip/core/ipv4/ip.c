@@ -38,6 +38,7 @@
  *
  */
 
+#include "net/lwip/debug.h"
 #include "net/lwip/opt.h"
 #include "net/lwip/ip.h"
 #include "net/lwip/def.h"
@@ -73,32 +74,32 @@ ip_route(struct ip_addr *dest)
   /* iterate through netifs */
   for(netif = netif_list; netif != NULL; netif = netif->next) {
   	if (dest)
-  	pr_debug("ip_route netif %p dest %p %lx\n", netif, dest, dest->addr);
+  	LWIP_DEBUGF(IP_DEBUG, ("ip_route netif %p dest %p %lx\n", netif, dest, dest->addr));
 	else
-  	pr_debug("ip_route netif %p dest %p\n", netif, dest);
+  	LWIP_DEBUGF(IP_DEBUG, ("ip_route netif %p dest %p\n", netif, dest));
     /* network mask matches? */
     if (netif_is_up(netif)) {
     	if (dest)
-  	pr_debug("ip_route netif %p is up dest %lx netifip %p %lx mask %lx\n", 
-			netif, dest->addr, netif->ip_addr, (netif->ip_addr).addr, (netif->netmask).addr);
+  	LWIP_DEBUGF(IP_DEBUG, ("ip_route netif %p is up dest %lx netifip %p %lx mask %lx\n", 
+			netif, dest->addr, netif->ip_addr, (netif->ip_addr).addr, (netif->netmask).addr));
 	//ip_addr_debug_print(NETIF_DEBUG, dest);
 	//ip_addr_debug_print(NETIF_DEBUG, netif->ip_addr);
 	//ip_addr_debug_print(NETIF_DEBUG, netif->netmask);
       if (ip_addr_netcmp(dest, &(netif->ip_addr), &(netif->netmask))) {
         /* return netif on which to forward IP packet */
-	pr_debug("ip_route found netif %p\n", netif);
+	LWIP_DEBUGF(IP_DEUBG, ("ip_route found netif %p\n", netif));
         return netif;
       }
     }
   }
   if ((netif_default == NULL) || (!netif_is_up(netif_default))) {
-    pr_debug("ip_route: No route to 0x%"X32_F"\n", dest->addr);
+    LWIP_DEBUGF(IP_DEBUG, ("ip_route: No route to 0x%"X32_F"\n", dest->addr));
     IP_STATS_INC(ip.rterr);
     snmp_inc_ipoutnoroutes();
     return NULL;
   }
   /* no matching netif found, use default netif */
-  pr_debug("ip_route no netif found netif %p\n", netif_default);
+  LWIP_DEBUGF(IP_DEBUG, ("ip_route no netif found netif %p\n", netif_default));
   return netif_default;
 }
 
@@ -540,18 +541,18 @@ ip_output_if(struct pbuf *p, struct ip_addr *src, struct ip_addr *dest,
 
 	IP_STATS_INC(ip.xmit);
 
-	pr_debug("ip_output_if: %c%c%"U16_F"\n", netif->name[0], netif->name[1], netif->num);
+	LWIP_DEBUGF(IP_DEBUG, ("ip_output_if: %c%c%"U16_F"\n", netif->name[0], netif->name[1], netif->num));
 	ip_debug_print(p);
 
 #if (LWIP_NETIF_LOOPBACK || LWIP_HAVE_LOOPIF)
 	if (ip_addr_cmp(dest, &netif->ip_addr)) {
 		/* Packet to self, enqueue it for loopback */
-		pr_debug("netif_loop_output()");
+		LWIP_DEBUGF("netif_loop_output()");
 		return netif_loop_output(netif, p, dest);
 	} else
 #endif /* (LWIP_NETIF_LOOPBACK || LWIP_HAVE_LOOPIF) */
 	{
-		pr_debug("netif->output()");
+		LWIP_DEBUGF(IP_DEBUG, ("netif->output()"));
 		return netif->output(netif, p, dest);
 	}
 }

@@ -318,7 +318,7 @@ lwipif_input_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     ctx_t *ctx = (ctx_t *)arg;
     struct fit_msg_hdr *hdr;
 
-    FIT_DEBUG("ctx[%d]eceived packet from port %d, length=%u\n", 
+    FIT_DEBUG("ctx[%d] received packet from port %d, length=%u\n", 
         ctx->id, port, p->len);
 
     hdr = (struct fit_msg_hdr *) p->payload;

@@ -147,14 +147,14 @@ netif_add(struct netif *netif, struct ip_addr *ipaddr, struct ip_addr *netmask,
 	}
 #endif /* LWIP_IGMP */
 
-	pr_debug("netif: added interface %c%c IP addr %lx ",
-				netif->name[0], netif->name[1], ipaddr->addr);
+	LWIP_DEBUGF(NETIF_DEBUG, ("netif: added interface %c%c IP addr %x ",
+				netif->name[0], netif->name[1], ipaddr->addr));
 	ip_addr_debug_print(NETIF_DEBUG, ipaddr);
-	pr_debug(" netmask %lx ", netmask->addr);
+	LWIP_DEBUGF(NETIF_DEBUG, (" netmask %x ", netmask->addr));
 	ip_addr_debug_print(NETIF_DEBUG, netmask);
-	pr_debug(" gw %lx ", gw->addr);
+	LWIP_DEBUGF(NETIF_DEBUG, (" gw %x ", gw->addr));
 	ip_addr_debug_print(NETIF_DEBUG, gw);
-	pr_debug("\n");
+	LWIP_DEBUGF(NETIF_DEBUG, ("\n"));
 	return netif;
 }
 
@@ -375,8 +375,8 @@ netif_set_default(struct netif *netif)
 		snmp_insert_iprteidx_tree(1, netif);
 	}
 	netif_default = netif;
-	pr_debug("netif: setting default interface %c%c\n",
-				netif ? netif->name[0] : '\'', netif ? netif->name[1] : '\'');
+	LWIP_DEBUGF(NETIF_DEBUG, ("netif: setting default interface %c%c\n",
+				netif ? netif->name[0] : '\'', netif ? netif->name[1] : '\''));
 }
 
 /**
