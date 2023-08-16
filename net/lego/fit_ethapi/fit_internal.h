@@ -95,22 +95,25 @@ struct fit_handle {
         struct {
             void *out_addr;
             size_t out_len;
-            struct pbuf *in_pbuf;
-            size_t in_off;
+            void *in_addr;
+            size_t in_len;
+            uintptr_t ack_info;
         } call;
         struct {
             void *out_addr;
             size_t out_len;
         } send;
         struct {
-            struct pbuf *in_pbuf;
-            size_t in_off;
+            void *in_addr;
+            size_t in_len;
             void *out_addr;
             size_t out_len;
+            uintptr_t ack_info;
         } recvcall;
         struct {
-            struct pbuf *in_pbuf;
-            size_t in_off;
+            void *in_addr;
+            size_t in_len;
+            uintptr_t ack_info;
         } recvsend;
     };
 };

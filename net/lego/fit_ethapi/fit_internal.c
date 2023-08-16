@@ -644,8 +644,11 @@ handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
     hdl->errno = 0;
 
     hdl->type = FIT_HANDLE_RECV_CALL;
-    hdl->recvcall.in_pbuf = pbuf;
-    hdl->recvcall.in_off = data_off;
+    hdl->recvcall.in_addr = pbuf->payload + data_off;
+    hdl->recvcall.in_len = pbuf->len - data_off;
+    hdl->recvcall.out_addr = NULL;
+    hdl->recvcall.out_len = 0;
+    hdl->recvcall.ack_info = (uintptr_t) pbuf;
 
     ctx_enque_input(ctx, hdl);
 }
@@ -674,8 +677,10 @@ handle_input_reply(ctx_t *ctx, fit_node_t node, fit_port_t port,
     }
     // TODO: Deal with scenarioes when we received duplicate replies
     hdl->errno = 0;
-    hdl->call.in_pbuf = pbuf;
-    hdl->call.in_off = data_off;
+    
+    hdl->call.in_addr = pbuf->payload + data_off;
+    hdl->call.in_len = pbuf->len - data_off;
+    hdl->call.ack_info = (uintptr_t) pbuf;
     /* We do not queue it in the input queue. Just notify the caller,
        which will free the pbuf */
     up(&hdl->sem);
@@ -805,8 +810,17 @@ fit_dispatch(void)
  * client threads interact with the FIT polling thread through the
  * (sending) message queue and message handlers.
  ************************************************************************/
+/**
+ * FIT clients call this to acknowledge the input message and free
+ * relevant buffer.
+ */
+static inline void __ack_input(uintptr_t ack_info)
+{
+    produce_free_pbuf((struct pbuf *) ack_info);
+}
 
-int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node, 
+int 
+fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node, 
     fit_port_t port, void *msg, size_t size, void *ret_addr, 
     size_t *ret_size, size_t max_ret_size)
 {
@@ -851,17 +865,17 @@ int fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
         goto after_alloc_handle;
     }
 
-    sz = h->call.in_pbuf->len - h->call.in_off;
-    if (sz > max_ret_size) {
+    if (h->call.in_len > max_ret_size) {
         FIT_WARN("Buffer size is not enough\n");
-        produce_free_pbuf(h->call.in_pbuf);
+        __ack_input(h->call.ack_info);
         sz = 0;
         ret = -ENOMEM;
         goto after_alloc_handle;
     }
+    sz = h->call.in_len;
 
-    memcpy(ret_addr, h->call.in_pbuf->payload + h->call.in_off, sz);
-    produce_free_pbuf(h->call.in_pbuf);
+    memcpy(ret_addr, h->call.in_addr, sz);
+    __ack_input(h->call.ack_info);
     ret = 0;
 after_alloc_handle:
     /* If there is an error, the FIT polling thread should
@@ -880,7 +894,6 @@ fit_recv(ctx_t *ctx, fit_port_t recv_port, fit_node_t *node,
     // TODO: Receive from different ports
     int ret;
     struct fit_handle *hdl;
-    size_t input_sz;
 
     ret = ctx_deque_input(ctx, &hdl);
     if (ret) { /* Woke up by signal */
@@ -890,20 +903,18 @@ fit_recv(ctx_t *ctx, fit_port_t recv_port, fit_node_t *node,
 
     switch (hdl->type) {
     case FIT_HANDLE_RECV_CALL:
-        input_sz = hdl->recvcall.in_pbuf->len - hdl->recvcall.in_off;
-        if (input_sz > buf_sz) {
+        if (hdl->recvcall.in_len > buf_sz) {
             FIT_WARN("Buffer size is not enough\n");
-            produce_free_pbuf(hdl->recvcall.in_pbuf);
+            __ack_input(hdl->recvcall.ack_info);
             ret = -ENOMEM;
             goto err;
         }
         *node = hdl->remote_node;
         *port = hdl->remote_port;
         *handle = (uintptr_t)hdl;
-        *sz = input_sz;
-        memcpy(buf, hdl->recvcall.in_pbuf->payload + hdl->recvcall.in_off,
-            input_sz);
-        produce_free_pbuf(hdl->recvcall.in_pbuf);
+        *sz = hdl->recvcall.in_len;
+        memcpy(buf, hdl->recvcall.in_addr, hdl->recvcall.in_len);
+        __ack_input(hdl->recvcall.ack_info);
         /* Cannot free the handle here because the corresponding reply 
            will depend on it. Do it in fit_reply(). */
         break;
