@@ -24,6 +24,11 @@
 #define IP_TMR_INTERVAL_MS      IP_TMR_INTERVAL
 #define SEM_DOWN_TIMEOUT_MS     (MIN(ARP_TMR_INTERVAL_MS, IP_TMR_INTERVAL_MS) + 10)
 
+#if defined(CONFIG_FIT_CALL_TO_THPOOL) && CONFIG_FIT_CALL_TO_THPOOL
+#define FIT_CALL_TO_THPOOL
+#include <memory/thread_pool.h>
+#endif
+
 #define FIT_UDP_PORT    6000U
 
 #define FIT_NUM_HANDLE      32U

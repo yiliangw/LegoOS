@@ -149,8 +149,6 @@ static int kernel_init(void *unused)
 	/* wait until eth finished initialization */
 	wait_for_completion(&eth_fit_init_done);
 	
-	test_fit();
-
 #elif defined(CONFIG_INFINIBAND_FIT)
 	init_socket();
 	kthread_run(lego_ib_init, NULL, "ib-initd");

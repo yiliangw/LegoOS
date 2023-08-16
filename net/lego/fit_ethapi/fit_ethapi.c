@@ -10,11 +10,6 @@ __initdata DEFINE_COMPLETION(eth_fit_init_done);
 
 static struct fit_context *CTX; 
 
-// TODO: for mComponent
-int ethapi_establish_conn(int ib_port, int mynodeid)
-{
-    return 0;
-}
 
 int ethapi_send_reply_timeout(int target_node, void *addr, int size, void *ret_addr,
         int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec)
@@ -38,6 +33,12 @@ int ethapi_send_reply_imm(int target_node, void *addr, int size, void *ret_addr,
 {
     return ethapi_send_reply_timeout(target_node, addr, size, ret_addr, max_ret_size,
             if_use_ret_phys_addr, FIT_MAX_TIMEOUT_SEC);
+}
+
+int ethapi_send(int target_node, void *addr, int size)
+{
+    panic("ethapi_send not implemented\n");
+    return -1;
 }
 
 int ethapi_receive_message(unsigned int designed_port, void *ret_addr,

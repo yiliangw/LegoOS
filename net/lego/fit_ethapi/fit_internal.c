@@ -14,6 +14,7 @@
 #include <lego/bitmap.h>
 #include <lego/list.h>
 #include <lego/fit_ibapi.h>
+#include <lego/comp_common.h>
 
 #include <net/netif/etharp.h>
 #include <net/e1000.h>
@@ -650,7 +651,15 @@ handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
     hdl->recvcall.out_len = 0;
     hdl->recvcall.ack_info = (uintptr_t) pbuf;
 
+#ifdef FIT_CALL_TO_THPOOL
+    /* Enqueue the request (FIT call) to thpool. Here, fit_offset
+       is not used in the ethernet implementation. Also, we use
+       fit_imm to hold our handler. */
+    thpool_callback(ctx, hdl, 
+        hdl->recvcall.in_addr, hdl->recvcall.in_len, node, 0);
+#else
     ctx_enque_input(ctx, hdl);
+#endif /* FIT_CALL_TO_THPOOL */
 }
 
 static void
@@ -730,6 +739,7 @@ fit_polling_thread_fn(void *_arg)
         while(down_trylock(&FPC->polling_sem) == 0);
         
         consume_free_pbuf();
+        poll_lwip();
         poll_pending_input();
         poll_pending_output();
     }
@@ -970,5 +980,45 @@ out:
     ctx_free_handle(ctx, hdl);
     return ret;
 }
+
+#ifdef FIT_CALL_TO_THPOOL
+void 
+fit_ack_reply_callback(struct thpool_buffer *b)
+{
+    ctx_t *ctx;
+    struct fit_handle *hdl;
+    void *reply_data;
+    size_t reply_len;
+
+    ctx = (ctx_t *)b->fit_ctx;
+    hdl = (struct fit_handle *)b->fit_imm;
+
+    /* Confirm the type */
+    BUG_ON(hdl->type != FIT_HANDLE_RECV_CALL &&
+        hdl->type != FIT_HANDLE_RECV_SEND);
+    
+    /* We could have done this earlier but for compatability
+       with the thpool implementation */
+    __ack_input(hdl->recvcall.ack_info);
+    
+    if (ThpoolBufferNoreply(b)) {
+        /* No need to reply */
+        if (hdl->type == FIT_HANDLE_RECV_CALL)
+            FIT_WARN("Not replying to a call.");
+        ctx_free_handle(ctx, hdl);
+        return;
+    }
+
+    if (ThpoolBufferPrivateTX(b))
+        reply_data = b->private_tx;
+    else
+        reply_data = b->tx;
+    reply_len = b->tx_size;
+
+    /* Do the reply. Notice that ctx_free_handle has been already 
+       called inside */
+    fit_reply(ctx, (uintptr_t) hdl, reply_data, reply_len);
+}
+#endif /* FIT_CALL_TO_THPOOL */
 /************************************************************************
  @} */ // end of group fit_api

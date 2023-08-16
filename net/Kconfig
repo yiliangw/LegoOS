@@ -23,6 +23,11 @@ config INFINIBAND_FIT
 	default n
 	depends on INFINIBAND
 
+config FIT_CALL_TO_THPOOL
+	bool "Enqueue FIT calls to thpool"
+	default y
+	depends on COMP_MEMORY
+
 config FIT_FIRST_QPN
 	int "The first QPN"
 	range 80 100
