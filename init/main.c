@@ -103,6 +103,8 @@ static void inline setup_nr_cpu_ids(void)
 
 static __initdata DEFINE_COMPLETION(kthreadd_done);
 
+int test_fit(void);
+
 /*
  * This is our first kernel thread (pid 1),f
  */
@@ -146,8 +148,8 @@ static int kernel_init(void *unused)
 
 	/* wait until eth finished initialization */
 	wait_for_completion(&eth_fit_init_done);
-	pr_info("eth_init_done\n");
-
+	
+	test_fit();
 
 #elif defined(CONFIG_INFINIBAND_FIT)
 	init_socket();
