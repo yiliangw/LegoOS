@@ -50,11 +50,15 @@ void *memcpy(void *dst, const void *src, size_t n);
 #define TCP_DEBUG	    LWIP_DBG_OFF
 #define IP_DEBUG        LWIP_DBG_OFF
 #define ETHARP_DEBUG    LWIP_DBG_OFF
+#define INET_DEBUG      LWIP_DBG_OFF
 //#define MEMP_DEBUG	LWIP_DBG_ON
+#define NETIF_DEBUG     LWIP_DBG_OFF
 #define SOCKETS_DEBUG	LWIP_DBG_ON
 //#define DBG_TYPES_ON	LWIP_DBG_ON
 //#define PBUF_DEBUG      LWIP_DBG_ON
 //#define API_LIB_DEBUG   LWIP_DBG_ON
+
+#define ETHARP_STATS    0
 
 #define DBG_MIN_LEVEL	DBG_LEVEL_SERIOUS
 #define LWIP_DBG_MIN_LEVEL	0
