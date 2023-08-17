@@ -89,7 +89,7 @@ int __init e1000_init(void)
 
 	ret = pci_register_driver(&e1000_driver);
 	if (ret) {
-		pr_err("e1000: pci_register_driver failed %d\n", ret);
+		e1000_err("pci_register_driver failed %d\n", ret);
 		return ret;
 	}
 
@@ -101,14 +101,14 @@ int e1000_transmit(const void *addr, u16 len)
 	size_t tdt;
 	struct E1000TxDesc *tail_desc;
 
-	pr_debug("e1000: Transmiting a packet len=%u\n", len);
+	e1000_debug("Transmiting a packet len=%u\n", len);
 
 	tdt = e1000[E1000_LOCATE(E1000_TDT)];
 	tail_desc = tx_desc_list + tdt;
 	
 	if ( !(tail_desc->status & E1000_TXD_STAT_DD )) {
 		// Status is not DD
-		pr_debug("e1000: Transmiting status is not DD\n");
+		e1000_debug("Transmiting status is not DD\n");
 		return -ENODATA;
 	}
 	memcpy(tx_pbuf + TX_PACKET_SIZE * tdt, addr, len);
@@ -119,7 +119,7 @@ int e1000_transmit(const void *addr, u16 len)
 
 	e1000[E1000_LOCATE(E1000_TDT)] = (tdt+1) % TX_DESC_NUM;
 
-	pr_debug("e1000: Transmission done\n");
+	e1000_debug("Transmission done\n");
 	return 0;
 }
 
@@ -161,7 +161,7 @@ int e1000_receive(void *buf, u16 *len)
 	}
 
 	if (!(rx_desc_list[next].status & E1000_RXD_STAT_DD) ) {
-		pr_err("e1000: Receive status is not DD\n");
+		e1000_err("Receive status is not DD\n");
 		return -EPERM;
 	}
 
@@ -185,7 +185,7 @@ static int e1000_set_mac(void)
 	ret = sscanf(CONFIG_E1000_NETIF_MAC, "%x:%x:%x:%x:%x:%x",
 		&mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
 	if (ret != 6) {
-		pr_err("e1000: Fail to get mac from CONFIG_E1000_NETIF_MAC: %s\n", CONFIG_E1000_NETIF_MAC);
+		e1000_err("Fail to get mac from CONFIG_E1000_NETIF_MAC: %s\n", CONFIG_E1000_NETIF_MAC);
 		return -1;
 	}
 
@@ -202,7 +202,7 @@ static int e1000_set_mac(void)
 	e1000[E1000_LOCATE(E1000_RA)] = low;
 	e1000[E1000_LOCATE(E1000_RA) + 1] = high | E1000_RAH_AV;
 
-	pr_info("e1000: Set mac address to %02x:%02x:%02x:%02x:%02x:%02x\n",
+	e1000_info("Set mac address to %02x:%02x:%02x:%02x:%02x:%02x\n",
 		mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
 	return 0;
@@ -219,12 +219,12 @@ static void e1000_transmit_init(struct pci_dev *pdev)
 	// initialize DMA for transmit descriptors and buffers
 	tx_desc_list = (struct E1000TxDesc *)dma_alloc_coherent(&pdev->dev, desc_size, &desc_dma_addr, GFP_KERNEL);
 	if (tx_desc_list == NULL) {
-		pr_err("e1000: dma_alloc_coherent\n");
+		e1000_err("dma_alloc_coherent failed 1\n");
 		return;
 	}
 	tx_pbuf = dma_alloc_coherent(&pdev->dev, buf_size, &pbuf_dma_addr, GFP_KERNEL);
 	if (tx_pbuf == NULL) {
-		pr_err("e1000: dma_alloc_coherent\n");
+		e1000_err("dma_alloc_coherent failed 2\n");
 		return;
 	}
 	memset(tx_desc_list, 0 , desc_size);
@@ -249,7 +249,7 @@ static void e1000_transmit_init(struct pci_dev *pdev)
 	// 10 8 6 
 	// 10 8 12
 	e1000[E1000_LOCATE(E1000_TIPG)] = 10 | (8 << 10) | (12 << 20);
-	pr_debug("e1000: Transmit init done\n");
+	e1000_debug("Transmit init done\n");
 }
 
 static void e1000_receive_init(struct pci_dev *pdev)
@@ -262,12 +262,12 @@ static void e1000_receive_init(struct pci_dev *pdev)
 	// initialize DMA for receive descriptors and buffers
 	rx_desc_list = (struct E1000RxDesc *)dma_alloc_coherent(&pdev->dev, desc_size, &desc_dma_addr, GFP_KERNEL);
 	if (rx_desc_list == NULL) {
-		pr_err("e1000: dma_alloc_coherent\n");
+		e1000_err("dma_alloc_coherent\n");
 		return;
 	}
 	rx_pbuf = dma_alloc_coherent(&pdev->dev, buf_size, &pbuf_dma_addr, GFP_KERNEL);
 	if (rx_pbuf == NULL) {
-		pr_err("e1000: dma_alloc_coherent\n");
+		e1000_err("dma_alloc_coherent 3\n");
 		return;
 	}
 	memset(rx_desc_list, 0 , desc_size);
@@ -285,7 +285,7 @@ static void e1000_receive_init(struct pci_dev *pdev)
 
 	e1000_set_mac();
 
-	pr_debug("e1000: Receive init done\n");
+	e1000_debug("Receive init done\n");
 }
 
 static irqreturn_t e1000_intr_handler(int irq, void *data)
@@ -294,7 +294,7 @@ static irqreturn_t e1000_intr_handler(int irq, void *data)
 	u32 icr;
 
 	icr = e1000[E1000_LOCATE(E1000_ICR)];
-	// pr_debug("e1000: Interrupt handler, cause=%x\n", cause);
+	// e1000_debug("Interrupt handler, cause=%x\n", cause);
 
 	pdev = (struct pci_dev *) data;
 	if (irq != pdev->irq)
@@ -323,14 +323,14 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	err = pci_enable_device(pdev);
 	if (err) {
-		pr_err("e1000: pci_enable_device: %d\n", err);
+		e1000_err("pci_enable_device: %d\n", err);
 		return err;
 	}
 
 	// initialize Memory-mapped I/O
 	err = pci_request_regions(pdev, "e1000");
 	if (err) {
-		pr_err("e1000: pci_request_regions: %d\n", err);
+		e1000_err("pci_request_regions: %d\n", err);
 		return err;
 	}
 	e1000 = (u32 *)ioremap_nocache(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
@@ -338,28 +338,28 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	// initialize Interrupt
 	err = e1000_request_irq(pdev);
 	if (err) {
-		pr_err("e1000: request_irq: %d\n", err);
+		e1000_err("request_irq: %d\n", err);
 		return err;
 	}
 	e1000[E1000_LOCATE(E1000_IMS)] = IMS_ENABLE_MASK;
 	// fire a link status change interrupt to start the watchdog
 	e1000[E1000_LOCATE(E1000_ICS)] = E1000_ICS_LSC;
 
-	pr_debug("e1000: pdev %p\n", pdev);
+	e1000_debug("pdev %p\n", pdev);
 
 
 	// initialize DMA
 	pci_set_master(pdev);
 	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
 	if (err) {
-		pr_err("e1000: dma_set_mask_and_coherent: %d\n", err);
+		e1000_err("dma_set_mask_and_coherent: %d\n", err);
 		return err;
 	}
 
 	e1000_transmit_init(pdev);
 	e1000_receive_init(pdev);
 
-	pr_debug("e1000: Initialized\n");
+	e1000_debug("Initialized\n");
 	return 0;
 }
 

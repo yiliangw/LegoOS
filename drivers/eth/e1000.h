@@ -2,6 +2,24 @@
 #define _E1000_H_
 
 #include <lego/types.h>
+#include <lego/printk.h>
+
+#define E1000_LOG_LEVEL   LOGLEVEL_INFO
+
+#define _E1000_LOG_PREFIX "E1000: "
+#define e1000_log(level, fmt, ...) do { \
+    if (level <= E1000_LOG_LEVEL) \
+        printk(_E1000_LOG_PREFIX fmt, ##__VA_ARGS__); \
+    } while (0)
+
+#define e1000_err(fmt, ...) \
+    e1000_log(LOGLEVEL_ERR, fmt, ##__VA_ARGS__)
+#define e1000_warn(fmt, ...) \
+    e1000_log(LOGLEVEL_WARN, fmt, ##__VA_ARGS__)
+#define e1000_debug(fmt, ...) \
+    e1000_log(LOGLEVEL_DEBUG, fmt, ##__VA_ARGS__)
+#define e1000_info(fmt, ...) \
+    e1000_log(LOGLEVEL_INFO, fmt, ##__VA_ARGS__)
 
 #define TX_DESC_NUM      32
 #define TX_PACKET_SIZE   2048
