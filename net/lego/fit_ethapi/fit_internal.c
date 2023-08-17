@@ -80,7 +80,7 @@ static void produce_free_pbuf(struct pbuf *pbuf)
     while (1) {
         tail = atomic_read(&FPC->free_pbuf_tail);
         if (tail == atomic_read(&FPC->free_pbuf_head) - 1) { /* Full */
-            FIT_WARN("Ran out of free pbuf slots\n");
+            fit_warn("Ran out of free pbuf slots\n");
             /* Notify the polling thread to clean up */
             __poke_polling_thread();
             set_current_state(TASK_INTERRUPTIBLE);
@@ -127,7 +127,7 @@ static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
 static void 
 e1000if_input_callback(void)
 {
-    FIT_DEBUG("E1000 interrupt detected\n");
+    fit_debug("E1000 interrupt detected\n");
     __poke_polling_thread();
 }
 
@@ -143,13 +143,13 @@ e1000if_low_level_input(struct pbuf **head)
 
     ret = e1000_receive(buf, &len);
     if (ret) {
-        FIT_ERR("Failed to receive packet: %d\n", ret);
+        fit_err("Failed to receive packet: %d\n", ret);
         goto err;
     }
 
     p = pbuf_alloc(PBUF_RAW, len, PBUF_POOL);
     if (p == NULL) {
-        FIT_ERR("Failed to allocate pbuf\n");
+        fit_err("Failed to allocate pbuf\n");
         ret = -ENOMEM;
         goto err;
     }
@@ -179,7 +179,7 @@ static err_t
 e1000if_low_level_output(struct netif *netif, struct pbuf *p)
 {
     int err;
-    pr_debug("Ethernet FIT: Transmitting packet, len: %d\n", p->len);
+    fit_debug("Ethernet FIT: Transmitting packet, len: %d\n", p->len);
     err = e1000_transmit(p->payload, p->len);
     if (err) {
         pr_err("Ethernet FIT: Failed to transmit packet\n");
@@ -222,29 +222,29 @@ e1000if_init(void)
     memset(&gateway, 0, sizeof(gateway));
 
     if ((ipaddr.addr = inet_addr(CONFIG_E1000_NETIF_IP)) == INADDR_NONE) {
-        FIT_ERR("Invalid IP address: %s\n", CONFIG_E1000_NETIF_IP);
+        fit_err("Invalid IP address: %s\n", CONFIG_E1000_NETIF_IP);
         goto ip_err;
     }
     if ((netmask.addr = inet_addr(CONFIG_E1000_NETIF_MASK)) == INADDR_NONE) {
-        FIT_ERR("Invalid netmask: %s\n", CONFIG_E1000_NETIF_MASK);
+        fit_err("Invalid netmask: %s\n", CONFIG_E1000_NETIF_MASK);
         goto ip_err;
     }
     if ((gateway.addr = inet_addr(CONFIG_E1000_NETIF_GATEWAY)) == INADDR_NONE) {
-        FIT_ERR("Invalid gateway: %s\n", CONFIG_E1000_NETIF_GATEWAY);
+        fit_err("Invalid gateway: %s\n", CONFIG_E1000_NETIF_GATEWAY);
         goto ip_err;
     }
 
     /* se should use ethernet_input here to handle Ethernet headers */
     if (netif_add(&FPC->e1000_netif, &ipaddr, &netmask, &gateway, NULL, e1000if_init_cb, ethernet_input) == NULL) {
-        FIT_ERR("Failed to add netif\n");
+        fit_err("Failed to add netif\n");
         goto ip_err;
     }
 
-    FIT_INFO("netif name: %s\n", e1000_netif_name);
-    FIT_INFO("netif ip: %s\n", CONFIG_E1000_NETIF_IP);
-    FIT_INFO("netif netmask: %s\n", CONFIG_E1000_NETIF_MASK);
-    FIT_INFO("netif gateway: %s\n", CONFIG_E1000_NETIF_GATEWAY);
-    FIT_INFO("netif mac: %02x:%02x:%02x:%02x:%02x:%02x\n",
+    fit_info("netif name: %s\n", e1000_netif_name);
+    fit_info("netif ip: %s\n", CONFIG_E1000_NETIF_IP);
+    fit_info("netif netmask: %s\n", CONFIG_E1000_NETIF_MASK);
+    fit_info("netif gateway: %s\n", CONFIG_E1000_NETIF_GATEWAY);
+    fit_info("netif mac: %02x:%02x:%02x:%02x:%02x:%02x\n",
 		FPC->e1000_netif.hwaddr[0], FPC->e1000_netif.hwaddr[1], FPC->e1000_netif.hwaddr[2],
         FPC->e1000_netif.hwaddr[3], FPC->e1000_netif.hwaddr[4], FPC->e1000_netif.hwaddr[5]);
 
@@ -254,11 +254,11 @@ e1000if_init(void)
     /* Let the E1000 driver notify the polling thread with fit_polling_sema */
     e1000_input_callback = e1000if_input_callback;
 
-    FIT_INFO("netif initialized\n");
+    fit_info("netif initialized\n");
     return 0;
 
 ip_err:
-    FIT_ERR("netif initialization failed\n");
+    fit_err("netif initialization failed\n");
     return -EINVAL;
 }
 /************************************************************************
@@ -280,14 +280,14 @@ lwipif_output(ctx_t *ctx, fit_port_t port, fit_node_t dst_node, fit_port_t dst_p
     const size_t hdr_len = sizeof(struct fit_msg_hdr);
 
     if (dst_node >= FIT_NUM_NODE) {
-        FIT_ERR("Invalid node number\n");
+        fit_err("Invalid node number\n");
         return -EINVAL;
     }
     dst_ip = &ctx->node_ip_addr[dst_node];
 
     p = pbuf_alloc(PBUF_TRANSPORT, hdr_len + len, PBUF_RAM);
     if (p == NULL) {
-        FIT_ERR("Failed to allocate pbuf\n");
+        fit_err("Failed to allocate pbuf\n");
         return -ENOMEM;
     }
 
@@ -301,10 +301,10 @@ lwipif_output(ctx_t *ctx, fit_port_t port, fit_node_t dst_node, fit_port_t dst_p
     hdr->dst_port = dst_port;
 
     memcpy(p->payload + hdr_len, msg, len);
-    FIT_DEBUG("Sending packet\n");
+    fit_debug("Sending packet\n");
     ret = udp_sendto(ctx->pcb, p, dst_ip, FIT_UDP_PORT);
     if (ret) {
-        FIT_ERR("Failed to send packet\n");
+        fit_err("Failed to send packet\n");
         return ret;
     }
     pbuf_free(p);
@@ -318,12 +318,12 @@ lwipif_input_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     ctx_t *ctx = (ctx_t *)arg;
     struct fit_msg_hdr *hdr;
 
-    FIT_DEBUG("ctx[%d] received packet from port %d, length=%u\n", 
+    fit_debug("ctx[%d] received packet from port %d, length=%u\n", 
         ctx->id, port, p->len);
 
     hdr = (struct fit_msg_hdr *) p->payload;
     if (hdr->dst_node != ctx->id) {
-        FIT_WARN("Received packet with wrong destination node\n");
+        fit_warn("Received packet with wrong destination node\n");
         pbuf_free(p);
         return;
     }
@@ -350,7 +350,7 @@ ctx_init(ctx_t *ctx, fit_node_t node_id, u16 udp_port, fit_input_cb_t input)
     ctx->udp_port = udp_port;
     ctx->pcb = udp_new();
     if (ctx->pcb == NULL) {
-        FIT_ERR("Fail to create udp pcb\n");
+        fit_err("Fail to create udp pcb\n");
         return -ENOMEM;
     }
     udp_bind(ctx->pcb, IP_ADDR_ANY, ctx->udp_port);
@@ -400,7 +400,7 @@ ctx_alloc_handle(ctx_t *ctx, struct fit_rpc_id *rpcid, int alloc_seqnum)
     spin_lock(&ctx->handles_lock);
     i = find_first_zero_bit(ctx->handles_bitmap, FIT_NUM_HANDLE);
     if (i == FIT_NUM_HANDLE) {
-        FIT_WARN("Run out of FIT handles.\n");
+        fit_warn("Run out of FIT handles.\n");
         hdl = NULL;
     } else {
         set_bit(i, ctx->handles_bitmap);
@@ -450,13 +450,13 @@ ctx_free_handle(ctx_t *ctx, struct fit_handle *handle)
     size_t idx = handle->id.__local_id;
     
     if (handle->ctx != ctx || idx >= FIT_NUM_HANDLE) {
-        FIT_ERR("Invalid handle\n");
+        fit_err("Invalid handle\n");
         return -EINVAL;
     }
     /* We do not need to lock here */
     handle->id.sequence_num = 0;
     if (test_and_clear_bit(idx, ctx->handles_bitmap) == 0) {
-        FIT_ERR("Freeing a free recv handle\n");
+        fit_err("Freeing a free recv handle\n");
         return -EPERM;
     }
 
@@ -530,7 +530,7 @@ poll_pending_input(void)
             continue;
         BUG_ON(p == NULL);
 
-        FIT_DEBUG("Received packet (len=%d)\n", p->len);
+        fit_debug("Received packet (len=%d)\n", p->len);
         /* input has been initialized to ethernet_input */
         FPC->e1000_netif.input(p, &FPC->e1000_netif);
     }
@@ -598,10 +598,10 @@ poll_pending_output(void)
                 case FIT_HANDLE_SEND: // TODO:
                 default:
                     ret = -EINVAL;
-                    FIT_PANIC("Output for handle type %d not implemented.\n", hdl->type);
+                    fit_panic("Output for handle type %d not implemented.\n", hdl->type);
             }
             if (ret)
-                FIT_WARN("Output failed: %d\n", ret);
+                fit_warn("Output failed: %d\n", ret);
         }                
     }
 }
@@ -635,7 +635,7 @@ handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
     struct fit_handle *hdl;
     hdl = ctx_alloc_handle(ctx, rpc_id, 0);
     if (hdl == NULL) {
-        FIT_WARN("Ran out of FIT handles.\n");
+        fit_warn("Ran out of FIT handles.\n");
         pbuf_free(pbuf);
         return;
     }
@@ -657,6 +657,7 @@ handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
        fit_imm to hold our handler. */
     thpool_callback(ctx, hdl, 
         hdl->recvcall.in_addr, hdl->recvcall.in_len, node, 0);
+    (void) ctx_enque_input;
 #else
     ctx_enque_input(ctx, hdl);
 #endif /* FIT_CALL_TO_THPOOL */
@@ -671,16 +672,16 @@ handle_input_reply(ctx_t *ctx, fit_node_t node, fit_port_t port,
     hdl = ctx_find_handle(ctx, rpc_id);
     if (hdl == NULL) {
         /* Regard as a delayed reply */
-        FIT_WARN("Cannot find the handle for the reply. Discarded.\n");
+        fit_warn("Cannot find the handle for the reply. Discarded.\n");
         goto err;
     }
     if (hdl->type != FIT_HANDLE_CALL) {
-        FIT_WARN("Received a reply for a non-call handle. Discarded.\n");
+        fit_warn("Received a reply for a non-call handle. Discarded.\n");
         goto err;
     }
     if (hdl->local_port != dst_port || hdl->remote_node != node || 
         hdl->remote_port != port) {
-        FIT_WARN("Received a reply for a call with conflicting \
+        fit_warn("Received a reply for a call with conflicting \
             communication info. Discarded.\n");
         goto err;
     }
@@ -715,20 +716,20 @@ handle_input(ctx_t *ctx, fit_node_t node, fit_port_t port,
             pbuf, data_off);
         break;
     case FIT_MSG_SEND: // TODO:
-        FIT_PANIC("input handler not implemented for message type %d\n",
+        fit_panic("input handler not implemented for message type %d\n",
             type);
     default:
-        FIT_ERR("Invalid message type %d\n", type);
+        fit_err("Invalid message type %d\n", type);
         pbuf_free(pbuf);
         break;
     }
 }
 
-static
+static int
 fit_polling_thread_fn(void *_arg)
 {
     if (pin_current_thread())
-        FIT_PANIC("Fail to pin FIT polling thread");
+        fit_panic("Fail to pin FIT polling thread");
 
     FPC->ts_etharp = FPC->ts_ipreass = current_kernel_time();
 
@@ -776,7 +777,7 @@ fit_init(void)
     atomic_set(&FPC->free_pbuf_head, 0);
     atomic_set(&FPC->free_pbuf_tail, 0);
     
-    FIT_INFO("Initalized\n");
+    fit_info("Initalized\n");
     return 0;
 
 }
@@ -788,7 +789,7 @@ fit_new_context(fit_node_t node_id, u16 udp_port)
     ctx_t *ctx;
 
     if (FPC->num_ctx >= FIT_NUM_CONTEXT) {
-        FIT_WARN("Only support %u contexts\n", FIT_NUM_CONTEXT);
+        fit_warn("Only support %u contexts\n", FIT_NUM_CONTEXT);
         return NULL;
     }
     ctx = &FPC->ctxs[FPC->num_ctx];
@@ -805,7 +806,7 @@ int
 fit_dispatch(void)
 {
     kthread_run(fit_polling_thread_fn, NULL, "FIT-polling");
-    FIT_INFO("Dispatched FIT polling thread.\n");
+    fit_info("Dispatched FIT polling thread.\n");
     return 0;
 }
 
@@ -840,7 +841,7 @@ fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
 
     h = ctx_alloc_handle(ctx, NULL, 1);
     if (h == NULL) {
-        FIT_WARN("No available handle\n");
+        fit_warn("No available handle\n");
         ret = -ENOMEM;
         goto before_alloc_handle;
     }
@@ -863,7 +864,7 @@ fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
     if (ret) {
         /* TODO: Manage resources when there is a interrupt, especially
            for the in_pbuf */
-        FIT_PANIC("Interrupted while waiting for reply\n");
+        fit_panic("Interrupted while waiting for reply\n");
         goto after_alloc_handle;
     }
 
@@ -876,7 +877,7 @@ fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
     }
 
     if (h->call.in_len > max_ret_size) {
-        FIT_WARN("Buffer size is not enough\n");
+        fit_warn("Buffer size is not enough\n");
         __ack_input(h->call.ack_info);
         sz = 0;
         ret = -ENOMEM;
@@ -907,14 +908,14 @@ fit_recv(ctx_t *ctx, fit_port_t recv_port, fit_node_t *node,
 
     ret = ctx_deque_input(ctx, &hdl);
     if (ret) { /* Woke up by signal */
-        FIT_WARN("Interrupted while waiting for message\n");
+        fit_warn("Interrupted while waiting for message\n");
         goto err;
     }
 
     switch (hdl->type) {
     case FIT_HANDLE_RECV_CALL:
         if (hdl->recvcall.in_len > buf_sz) {
-            FIT_WARN("Buffer size is not enough\n");
+            fit_warn("Buffer size is not enough\n");
             __ack_input(hdl->recvcall.ack_info);
             ret = -ENOMEM;
             goto err;
@@ -930,11 +931,11 @@ fit_recv(ctx_t *ctx, fit_port_t recv_port, fit_node_t *node,
         break;
     case FIT_HANDLE_RECV_SEND:
         // TODO:
-        FIT_PANIC("Not implemented\n");
+        fit_panic("Not implemented\n");
         /* Can free the handle immediately since there is no reply */
         break;
     default:
-        FIT_PANIC("Invalid handle type(%d) in the input queue\n", 
+        fit_panic("Invalid handle type(%d) in the input queue\n", 
             hdl->type);
     }
 
@@ -956,7 +957,7 @@ fit_reply(ctx_t *ctx, uintptr_t handle, void *msg, size_t len)
     hdl = (struct fit_handle *)handle;
     // TODO: Do some other check on the handle
     if (hdl->ctx != ctx || hdl->type != FIT_HANDLE_RECV_CALL) {
-        FIT_ERR("Invalid handle\n");
+        fit_err("Invalid handle\n");
         return -EINVAL;
     }
 
@@ -970,7 +971,7 @@ fit_reply(ctx_t *ctx, uintptr_t handle, void *msg, size_t len)
     ret = down_interruptible(&hdl->sem);
     if (ret) {
         // TODO: Manage resources when there is a interrupt.
-        FIT_PANIC("Interrupted while doing reply\n");
+        fit_panic("Interrupted while doing reply\n");
         goto out;
     }
 
@@ -1004,7 +1005,7 @@ fit_ack_reply_callback(struct thpool_buffer *b)
     if (ThpoolBufferNoreply(b)) {
         /* No need to reply */
         if (hdl->type == FIT_HANDLE_RECV_CALL)
-            FIT_WARN("Not replying to a call.");
+            fit_warn("Not replying to a call.");
         ctx_free_handle(ctx, hdl);
         return;
     }

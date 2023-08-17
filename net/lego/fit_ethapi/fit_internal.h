@@ -5,20 +5,30 @@
 #include <lego/semaphore.h>
 #include <lego/spinlock.h>
 #include <lego/time.h>
+#include <lego/printk.h>
 #include <net/lwip/ip_addr.h>
+#include <net/lwip/pbuf.h>
 #include "fit.h"
 
-#define FIT_ERR(fmt, ...) \
-    pr_err("Ethernet FIT: " fmt, ##__VA_ARGS__)
-#define FIT_WARN(fmt, ...) \
-    pr_warn("Ethernet FIT: " fmt, ##__VA_ARGS__)
-#define FIT_DEBUG(fmt, ...) \
-    pr_debug("Ethernet FIT: " fmt, ##__VA_ARGS__)
-#define FIT_INFO(fmt, ...) \
-    pr_info("Ethernet FIT: " fmt, ##__VA_ARGS__)
+#define FIT_LOG_LEVEL   LOGLEVEL_INFO
 
-#define FIT_PANIC(fmt, ...) \
-    panic("Ethernet FIT: " fmt, ##__VA_ARGS__)
+#define _FIT_LOG_PREFIX "FIT: "
+#define fit_log(level, fmt, ...) do { \
+    if (level <= FIT_LOG_LEVEL) \
+        printk(_FIT_LOG_PREFIX fmt, ##__VA_ARGS__); \
+    } while (0)
+
+#define fit_err(fmt, ...) \
+    fit_log(LOGLEVEL_ERR, fmt, ##__VA_ARGS__)
+#define fit_warn(fmt, ...) \
+    fit_log(LOGLEVEL_WARNING, fmt, ##__VA_ARGS__)
+#define fit_debug(fmt, ...) \
+    fit_log(LOGLEVEL_DEBUG, fmt, ##__VA_ARGS__)
+#define fit_info(fmt, ...) \
+    fit_log(LOGLEVEL_INFO, fmt, ##__VA_ARGS__)
+
+#define fit_panic(fmt, ...) \
+    panic(_FIT_LOG_PREFIX fmt, ##__VA_ARGS__)
 
 #define ARP_TMR_INTERVAL_MS     ARP_TMR_INTERVAL
 #define IP_TMR_INTERVAL_MS      IP_TMR_INTERVAL
