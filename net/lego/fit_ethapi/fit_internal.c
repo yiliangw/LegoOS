@@ -15,6 +15,7 @@
 #include <lego/list.h>
 #include <lego/fit_ibapi.h>
 #include <lego/comp_common.h>
+#include <lego/string.h>
 
 #include <net/netif/etharp.h>
 #include <net/e1000.h>
@@ -116,6 +117,30 @@ static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
     return (t1->tv_sec - t2->tv_sec) * 1000 + (t1->tv_nsec - t2->tv_nsec) / 1000000;
 }
 
+/**
+ * Check should be performed before calling this function to ensure
+ * the size of dst is enough.
+ */
+static void __copy_from_pbuf(void *dst, struct pbuf *p, off_t off)
+{
+    struct pbuf *q;
+    off_t copied_len = 0;
+    for (q = p; q != NULL; q = q->next) {
+        if (off) {
+            if (off >= q->len) {
+                off -= q->len;
+                continue;
+            }
+            memcpy(dst /*+0*/, q->payload + off, q->len - off);
+            copied_len += q->len - off;
+            off = 0;
+        } else {
+            memcpy(dst + copied_len, q->payload, q->len);
+            copied_len += q->len;
+        }
+    }
+}
+
 /************************************************************************
  * @defgroup interface_lwip_e1000 LwIP's interface with E1000 driver
  * @{
@@ -127,7 +152,6 @@ static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
 static void 
 e1000if_input_callback(void)
 {
-    fit_debug("E1000 interrupt detected\n");
     __poke_polling_thread();
 }
 
@@ -179,10 +203,22 @@ static err_t
 e1000if_low_level_output(struct netif *netif, struct pbuf *p)
 {
     int err;
-    fit_debug("Ethernet FIT: Transmitting packet, len: %d\n", p->len);
-    err = e1000_transmit(p->payload, p->len);
+    
+    struct pbuf *q;
+    off_t off = 0;
+
+    for (q = p; q != NULL; q = q->next) {
+        if (e1000_prepare(q->payload, q->len, off)) {
+            fit_err("Failed to prepare packet\n");
+            return ERR_IF;
+        }
+        off += q->len;
+    }
+
+    fit_debug("Transmitting packet, len: %d\n", p->tot_len);
+    err = e1000_transmit(p->tot_len);
     if (err) {
-        pr_err("Ethernet FIT: Failed to transmit packet\n");
+        pr_err("Failed to transmit packet\n");
         return ERR_IF;
     }
     return ERR_OK;
@@ -319,7 +355,7 @@ lwipif_input_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
     struct fit_msg_hdr *hdr;
 
     fit_debug("ctx[%d] received packet from port %d, length=%u\n", 
-        ctx->id, port, p->len);
+        ctx->id, port, p->tot_len);
 
     hdr = (struct fit_msg_hdr *) p->payload;
     if (hdr->dst_node != ctx->id) {
@@ -630,7 +666,7 @@ poll_lwip(void)
 static void
 handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
     fit_port_t dst_port, struct fit_rpc_id *rpc_id, 
-    struct pbuf *pbuf, size_t data_off)
+    struct pbuf *pbuf, off_t data_off)
 {
     struct fit_handle *hdl;
     hdl = ctx_alloc_handle(ctx, rpc_id, 0);
@@ -645,19 +681,38 @@ handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
     hdl->errno = 0;
 
     hdl->type = FIT_HANDLE_RECV_CALL;
-    hdl->recvcall.in_addr = pbuf->payload + data_off;
-    hdl->recvcall.in_len = pbuf->len - data_off;
+    hdl->recvcall.in_pbuf = pbuf;
+    hdl->recvcall.in_off = data_off;
     hdl->recvcall.out_addr = NULL;
     hdl->recvcall.out_len = 0;
-    hdl->recvcall.ack_info = (uintptr_t) pbuf;
 
 #ifdef FIT_CALL_TO_THPOOL
     /* Enqueue the request (FIT call) to thpool. Here, fit_offset
        is not used in the ethernet implementation. Also, we use
        fit_imm to hold our handler. */
-    thpool_callback(ctx, hdl, 
-        hdl->recvcall.in_addr, hdl->recvcall.in_len, node, 0);
-    (void) ctx_enque_input;
+
+    {
+        void *buf;
+        size_t tot_len;
+        int chain = pbuf->tot_len > pbuf->len;
+        
+        tot_len = pbuf->tot_len - data_off;
+        if (chain) {
+            /* For compatability with thpool, we should malloc a continuous 
+            buffer which is large enough. */
+            buf = kmalloc(tot_len, GFP_KERNEL);
+            __copy_from_pbuf(buf, pbuf->payload, data_off);
+        } else {
+            buf = pbuf->payload + data_off;
+        }
+        
+        thpool_callback(ctx, hdl, 
+            buf, tot_len, node, 0);
+
+        if (chain)
+            kfree(buf);
+        (void) ctx_enque_input;
+    }
 #else
     ctx_enque_input(ctx, hdl);
 #endif /* FIT_CALL_TO_THPOOL */
@@ -666,7 +721,7 @@ handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
 static void
 handle_input_reply(ctx_t *ctx, fit_node_t node, fit_port_t port,
     fit_port_t dst_port, struct fit_rpc_id *rpc_id, 
-    struct pbuf *pbuf, size_t data_off)
+    struct pbuf *pbuf, off_t data_off)
 {
     struct fit_handle *hdl;
     hdl = ctx_find_handle(ctx, rpc_id);
@@ -688,9 +743,8 @@ handle_input_reply(ctx_t *ctx, fit_node_t node, fit_port_t port,
     // TODO: Deal with scenarioes when we received duplicate replies
     hdl->errno = 0;
     
-    hdl->call.in_addr = pbuf->payload + data_off;
-    hdl->call.in_len = pbuf->len - data_off;
-    hdl->call.ack_info = (uintptr_t) pbuf;
+    hdl->call.in_pbuf = pbuf;
+    hdl->call.in_off = data_off;
     /* We do not queue it in the input queue. Just notify the caller,
        which will free the pbuf */
     up(&hdl->sem);
@@ -704,7 +758,7 @@ err:
 static void
 handle_input(ctx_t *ctx, fit_node_t node, fit_port_t port,
     fit_port_t dst_port, fit_msg_type_t type, struct fit_rpc_id *rpc_id,
-    struct pbuf *pbuf, size_t data_off)
+    struct pbuf *pbuf, off_t data_off)
 {
     switch(type) {
     case FIT_MSG_CALL:
@@ -821,14 +875,6 @@ fit_dispatch(void)
  * client threads interact with the FIT polling thread through the
  * (sending) message queue and message handlers.
  ************************************************************************/
-/**
- * FIT clients call this to acknowledge the input message and free
- * relevant buffer.
- */
-static inline void __ack_input(uintptr_t ack_info)
-{
-    produce_free_pbuf((struct pbuf *) ack_info);
-}
 
 int 
 fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node, 
@@ -876,17 +922,18 @@ fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
         goto after_alloc_handle;
     }
 
-    if (h->call.in_len > max_ret_size) {
+    sz = h->call.in_pbuf->tot_len - h->call.in_off;
+
+    if (sz > max_ret_size) {
         fit_warn("Buffer size is not enough\n");
-        __ack_input(h->call.ack_info);
+        produce_free_pbuf(h->call.in_pbuf);
         sz = 0;
         ret = -ENOMEM;
         goto after_alloc_handle;
     }
-    sz = h->call.in_len;
 
-    memcpy(ret_addr, h->call.in_addr, sz);
-    __ack_input(h->call.ack_info);
+    __copy_from_pbuf(ret_addr, h->call.in_pbuf, h->call.in_off);
+    produce_free_pbuf(h->call.in_pbuf);
     ret = 0;
 after_alloc_handle:
     /* If there is an error, the FIT polling thread should
@@ -905,6 +952,7 @@ fit_recv(ctx_t *ctx, fit_port_t recv_port, fit_node_t *node,
     // TODO: Receive from different ports
     int ret;
     struct fit_handle *hdl;
+    size_t _sz;
 
     ret = ctx_deque_input(ctx, &hdl);
     if (ret) { /* Woke up by signal */
@@ -914,18 +962,19 @@ fit_recv(ctx_t *ctx, fit_port_t recv_port, fit_node_t *node,
 
     switch (hdl->type) {
     case FIT_HANDLE_RECV_CALL:
-        if (hdl->recvcall.in_len > buf_sz) {
+        _sz = hdl->recvcall.in_pbuf->tot_len - hdl->recvcall.in_off;
+        if (_sz > buf_sz) {
             fit_warn("Buffer size is not enough\n");
-            __ack_input(hdl->recvcall.ack_info);
+            produce_free_pbuf(hdl->recvcall.in_pbuf);
             ret = -ENOMEM;
             goto err;
         }
         *node = hdl->remote_node;
         *port = hdl->remote_port;
         *handle = (uintptr_t)hdl;
-        *sz = hdl->recvcall.in_len;
-        memcpy(buf, hdl->recvcall.in_addr, hdl->recvcall.in_len);
-        __ack_input(hdl->recvcall.ack_info);
+        *sz = _sz;
+        __copy_from_pbuf(buf, hdl->recvcall.in_pbuf, hdl->recvcall.in_off);
+        produce_free_pbuf(hdl->recvcall.in_pbuf);
         /* Cannot free the handle here because the corresponding reply 
            will depend on it. Do it in fit_reply(). */
         break;
@@ -1000,7 +1049,7 @@ fit_ack_reply_callback(struct thpool_buffer *b)
     
     /* We could have done this earlier but for compatability
        with the thpool implementation */
-    __ack_input(hdl->recvcall.ack_info);
+    produce_free_pbuf(hdl->recvcall.in_pbuf);
     
     if (ThpoolBufferNoreply(b)) {
         /* No need to reply */
