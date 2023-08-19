@@ -15,7 +15,7 @@
 #define e1000_err(fmt, ...) \
     e1000_log(LOGLEVEL_ERR, fmt, ##__VA_ARGS__)
 #define e1000_warn(fmt, ...) \
-    e1000_log(LOGLEVEL_WARN, fmt, ##__VA_ARGS__)
+    e1000_log(LOGLEVEL_WARNING, fmt, ##__VA_ARGS__)
 #define e1000_debug(fmt, ...) \
     e1000_log(LOGLEVEL_DEBUG, fmt, ##__VA_ARGS__)
 #define e1000_info(fmt, ...) \

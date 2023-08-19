@@ -96,25 +96,65 @@ int __init e1000_init(void)
 	return 0;
 }
 
-int e1000_transmit(const void *addr, u16 len)
+int e1000_prepare(const void *src, size_t len, off_t offset)
 {
-	size_t tdt;
+	size_t tdt, tdh;
 	struct E1000TxDesc *tail_desc;
 
-	e1000_debug("Transmiting a packet len=%u\n", len);
+	if (offset + len > TX_PACKET_SIZE) {
+		e1000_err("Packet size too large\n");
+		return -EINVAL;
+	}
 
 	tdt = e1000[E1000_LOCATE(E1000_TDT)];
+	tdh = e1000[E1000_LOCATE(E1000_TDH)];
+
+	if ((tdt + 1) % TX_DESC_NUM == tdh) {
+		e1000_warn("%s transmission queue full\n", __func__);
+		return -ENOMEM;
+	}
+
 	tail_desc = tx_desc_list + tdt;
 	
 	if ( !(tail_desc->status & E1000_TXD_STAT_DD )) {
-		// Status is not DD
+		/* This really should not happen */
+		e1000_err("Status is not DD\n");
+		return -EPERM;
+	}
+
+	memcpy(tx_pbuf + TX_PACKET_SIZE * tdt + offset, src, len);
+	
+	e1000_debug("Preparation done. offset=%ld, length+%d\n", offset, len);
+	return 0;
+}
+
+int e1000_transmit(size_t len)
+{
+	size_t tdt, tdh;
+	struct E1000TxDesc *tail_desc;
+
+	if (len > TX_PACKET_SIZE) {
+		e1000_err("Packet size too large\n");
+		return -EINVAL;
+	}
+
+	tdt = e1000[E1000_LOCATE(E1000_TDT)];
+	tdh = e1000[E1000_LOCATE(E1000_TDH)];
+
+	if ((tdt + 1) % TX_DESC_NUM == tdh) {
+		e1000_warn("%s trasmission queue full\n", __func__);
+		return -EPERM;
+	}
+
+	tail_desc = tx_desc_list + tdt;
+	if ( !(tail_desc->status & E1000_TXD_STAT_DD )) {
 		e1000_debug("Transmiting status is not DD\n");
 		return -ENODATA;
 	}
-	memcpy(tx_pbuf + TX_PACKET_SIZE * tdt, addr, len);
+
+	e1000_debug("Transmiting a packet len=%u\n", len);
 	
 	tail_desc->length = (uint16_t )len;
-	// clear DD 
 	tail_desc->status &= (~E1000_TXD_STAT_DD);
 
 	e1000[E1000_LOCATE(E1000_TDT)] = (tdt+1) % TX_DESC_NUM;
@@ -300,8 +340,10 @@ static irqreturn_t e1000_intr_handler(int irq, void *data)
 	if (irq != pdev->irq)
 		return IRQ_NONE;
 
-	if ((icr & E1000_IMS_RXT0) && e1000_input_callback)
+	if ((icr & E1000_IMS_RXT0) && e1000_input_callback) {
+		e1000_debug("Received interrupt\n");
 		e1000_input_callback();
+	}
 
 	return IRQ_HANDLED;
 }
