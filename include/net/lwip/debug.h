@@ -78,8 +78,6 @@
  *  AND is of correct type AND is at least LWIP_DBG_LEVEL
  */
 
-#include <lego/printk.h>
-
 #define LWIP_DEBUGF(debug, message) do { \
                                if ( \
                                    ((debug) & LWIP_DBG_ON) && \

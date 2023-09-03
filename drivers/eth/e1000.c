@@ -1,3 +1,15 @@
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/device.h>
+#include <linux/dma-mapping.h>
+#include <linux/errno.h>
+#include <linux/kernel.h>
+#include <linux/printk.h>
+#include <linux/pci.h>
+#include <linux/types.h>
+#include <linux/irq.h>
+#include <linux/irqdesc.h>
+#include <linux/mm.h>
+#else
 #include <lego/device.h>
 #include <lego/dma-mapping.h>
 #include <lego/errno.h>
@@ -8,22 +20,19 @@
 #include <lego/irq.h>
 #include <lego/irqdesc.h>
 #include <lego/mm.h>
+#endif /* _LEGO_LINUX_MODULE_ */
 
 #include <net/netif/etharp.h>
+#include <net/e1000.h>
 
 #include "e1000.h"
-#include <net/e1000.h>
 
 
 static volatile u32 *e1000;
 
-// struct E1000TxDesc tx_desc_list[TX_DESC_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
-// char tx_pbuf[TX_DESC_SIZE][TX_PACKET_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
 struct E1000TxDesc *tx_desc_list;
 u8 *tx_pbuf;
 
-// struct E1000RxDesc rx_desc_list[RX_DESC_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
-// char rx_pbuf[RX_DESC_SIZE][RX_PACKET_SIZE] __attribute__((aligned (PAGE_SIZE))) ;
 struct E1000RxDesc *rx_desc_list;
 u8 *rx_pbuf;
 
@@ -32,7 +41,7 @@ u8 e1000_mac[ETHARP_HWADDR_LEN];
 
 #define INTEL_E1000_ETHERNET_DEVICE(device_id) {\
 	PCI_DEVICE(PCI_VENDOR_ID_INTEL, device_id)}
-static DEFINE_PCI_DEVICE_TABLE(e1000_pci_tbl) = {
+static const struct pci_device_id e1000_pci_tbl[] = {
 	INTEL_E1000_ETHERNET_DEVICE(0x1000),
 	INTEL_E1000_ETHERNET_DEVICE(0x1001),
 	INTEL_E1000_ETHERNET_DEVICE(0x1004),
@@ -96,6 +105,11 @@ int __init e1000_init(void)
 	return 0;
 }
 
+void e1000_exit(void)
+{
+	pci_unregister_driver(&e1000_driver);
+}
+
 int e1000_prepare(const void *src, size_t len, off_t offset)
 {
 	size_t tdt, tdh;
@@ -124,7 +138,7 @@ int e1000_prepare(const void *src, size_t len, off_t offset)
 
 	memcpy(tx_pbuf + TX_PACKET_SIZE * tdt + offset, src, len);
 	
-	e1000_debug("Preparation done. offset=%ld, length+%d\n", offset, len);
+	e1000_debug("Preparation done. offset=%ld, length=%lu\n", offset, len);
 	return 0;
 }
 
@@ -152,7 +166,7 @@ int e1000_transmit(size_t len)
 		return -ENODATA;
 	}
 
-	e1000_debug("Transmiting a packet len=%u\n", len);
+	e1000_debug("Transmiting a packet len=%lu\n", len);
 	
 	tail_desc->length = (uint16_t )len;
 	tail_desc->status &= (~E1000_TXD_STAT_DD);
@@ -222,10 +236,10 @@ static int e1000_set_mac(void)
 	u32 low, high;
 	int i, ret;
 
-	ret = sscanf(CONFIG_E1000_NETIF_MAC, "%x:%x:%x:%x:%x:%x",
+	ret = sscanf(E1000_NETIF_MAC, "%x:%x:%x:%x:%x:%x",
 		&mac[0], &mac[1], &mac[2], &mac[3], &mac[4], &mac[5]);
 	if (ret != 6) {
-		e1000_err("Fail to get mac from CONFIG_E1000_NETIF_MAC: %s\n", CONFIG_E1000_NETIF_MAC);
+		e1000_err("Fail to get mac from E1000_NETIF_MAC: %s\n", E1000_NETIF_MAC);
 		return -1;
 	}
 
@@ -375,7 +389,7 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		e1000_err("pci_request_regions: %d\n", err);
 		return err;
 	}
-	e1000 = (u32 *)ioremap_nocache(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
+	e1000 = (u32 *)ioremap(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
 
 	// initialize Interrupt
 	err = e1000_request_irq(pdev);
@@ -407,4 +421,33 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 static void e1000_remove(struct pci_dev *pdev)
 {
+	e1000_warn("%s not implemented.", __func__);
 }
+
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/module.h>
+#include <linux/types.h>
+#include <linux/printk.h>
+
+EXPORT_SYMBOL(e1000_input_callback);
+EXPORT_SYMBOL(e1000_prepare);
+EXPORT_SYMBOL(e1000_transmit);
+EXPORT_SYMBOL(e1000_receive);
+EXPORT_SYMBOL(e1000_pending_reception);
+EXPORT_SYMBOL(e1000_clear_pending_reception);
+
+static int __init e1000_init_module(void)
+{
+    return e1000_init();
+}
+
+static void __exit e1000_exit_module(void)
+{
+	e1000_exit();
+}
+
+module_init(e1000_init_module);
+module_exit(e1000_exit_module);
+
+MODULE_LICENSE ("GPL");
+#endif /*_LEGO_LINUX_MODULE_ */

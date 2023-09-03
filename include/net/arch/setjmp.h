@@ -1,7 +1,11 @@
 #ifndef LEGO_INC_SETJMP_H
 #define LEGO_INC_SETJMP_H
 
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/types.h>
+#else
 #include <lego/types.h>
+#endif /* _LEGO_LINUX_MODULE_ */
 
 #define LEGO_LONGJMP_GCCATTR	regparm(2)
 

@@ -5,7 +5,11 @@
 // consistently included in all of lwip, a definition of memcpy can be added
 // here to make it lwip visible. I am hiding lwip because LEGO seems to want to
 // do so. There is a declaration of memcpy in LEGO but not a definition.
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/types.h>
+#else
 #include <lego/types.h>
+#endif /* _LEGO_LINUX_MODULE_ */
 void *memcpy(void *dst, const void *src, size_t n);
 
 //#define NO_SYS 1

@@ -1,7 +1,11 @@
 #ifndef LWIP_ARCH_SYS_ARCH_H
 #define LWIP_ARCH_SYS_ARCH_H
 
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/types.h>
+#else
 #include <lego/types.h>
+#endif /* _LEGO_LINUX_MODULE_ */
 
 typedef	int sys_sem_t;
 typedef int sys_mbox_t;

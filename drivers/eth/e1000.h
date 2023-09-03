@@ -1,8 +1,19 @@
 #ifndef _E1000_H_
 #define _E1000_H_
 
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/types.h>
+#include <linux/printk.h>
+#else
 #include <lego/types.h>
 #include <lego/printk.h>
+#endif /* _LEGO_LINUX_MODULE_ */
+
+#ifdef CONFIG_E1000_NETIF_MAC
+#define E1000_NETIF_MAC CONFIG_E1000_NETIF_MAC
+#else
+#define E1000_NETIF_MAC "00:00:00:00:00:00"
+#endif /* CONFIG_E1000_NETIF_MAC */
 
 #define E1000_LOG_LEVEL   LOGLEVEL_INFO
 

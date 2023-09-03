@@ -1,10 +1,16 @@
 #ifndef LWIP_ARCH_CC_H
 #define LWIP_ARCH_CC_H
 
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/types.h>
+#include <linux/printk.h>
+#include <linux/panic.h>
+#else
 #include <lego/types.h>
 #include <lego/printk.h>
 #include <lego/panic.h>
 //#include <lego/assert.h>
+#endif /* _LEGO_LINUX_MODULE_ */
 
 typedef u32 u32_t;
 typedef s32 s32_t;

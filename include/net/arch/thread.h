@@ -1,7 +1,11 @@
 #ifndef LWIP_ARCH_THREAD_H
 #define LWIP_ARCH_THREAD_H
 
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/types.h>
+#else
 #include <lego/types.h>
+#endif
 
 typedef u32 thread_id_t;
 
