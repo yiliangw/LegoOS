@@ -1,7 +1,9 @@
 obj-m := e1000_lego.o
 
 LEGOOS_REL ?= ../..
-LEGOOS_ABS ?= $(abspath $(M)/$(LEGOOS_REL))
+LEGOOS_ABS ?= $(abspath $(LEGOOS_REL))
+export LEGOOS_REL
+export LEGOOS_ABS
 
 # Relative path is required here to make it work
 e1000_obj := $(addprefix $(LEGOOS_REL)/drivers/eth/, e1000.o)
@@ -16,6 +18,7 @@ $(warn `KERNEL_PATH` is not specified, using default: $(KERNEL_PATH))
 endif
 
 KERNEL_PATH := $(abspath $(KERNEL_PATH))
+export KERNEL_PATH
 
 all:
 	make -C $(KERNEL_PATH) M=$(shell pwd) modules
