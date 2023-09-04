@@ -83,8 +83,8 @@
 #include "net/lwip/autoip.h"
 #include "net/lwip/dns.h"
 #include "net/netif/etharp.h"
+#include "net/lwip/string.h"
 
-#include "lego/string.h"
 
 /** global transaction identifier, must be
  *  unique for each DHCP request. We simply increment, starting

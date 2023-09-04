@@ -61,8 +61,7 @@
 #include "net/lwip/mem.h"
 #include "net/lwip/sys.h"
 #include "net/lwip/stats.h"
-
-#include "lego/string.h"
+#include "net/lwip/string.h"
 
 #if MEM_USE_POOLS
 /* lwIP head implemented with different sized pools */

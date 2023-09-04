@@ -69,9 +69,8 @@
 #include "net/lwip/memp.h"
 #include "net/lwip/pbuf.h"
 #include "net/lwip/sys.h"
+#include "net/lwip/string.h"
 #include "net/arch/perf.h"
-
-#include "lego/string.h"
 
 #define SIZEOF_STRUCT_PBUF        LWIP_MEM_ALIGN_SIZE(sizeof(struct pbuf))
 /* Since the pool is created in memp, PBUF_POOL_BUFSIZE will be automatically

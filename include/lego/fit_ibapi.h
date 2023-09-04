@@ -10,9 +10,16 @@
 #ifndef _INCLUDE_FIT_API_H
 #define _INCLUDE_FIT_API_H
 
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/types.h>
+#include <linux/errno.h>
+#include <linux/atomic.h>
+#else
 #include <lego/types.h>
 #include <lego/errno.h>
 #include <lego/atomic.h>
+#endif /* _LEGO_LINUX_MODULE_ */
+
 #include <net/arch/cc.h>
 
 #include <uapi/fit.h>

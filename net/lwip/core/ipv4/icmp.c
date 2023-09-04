@@ -50,8 +50,7 @@
 #include "net/lwip/def.h"
 #include "net/lwip/stats.h"
 #include "net/lwip/snmp.h"
-
-#include "lego/string.h"
+#include "net/lwip/string.h"
 
 /* The amount of data from the original packet to return in a dest-unreachable */
 #define ICMP_DEST_UNREACH_DATASIZE 8

@@ -1,12 +1,16 @@
-#include "lego/errno.h"
-#include "uapi/fit.h"
-#include <lego/fit_ibapi.h>
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/errno.h>
+#include <linux/completion.h>
+#else
+#include <lego/errno.h>
 #include <lego/completion.h>
+#endif /* _LEGO_LINUX_MODULE_ */
 
+#include <lego/fit_ibapi.h>
 #include "fit.h"
 #include "fit_internal.h"
 
-__initdata DEFINE_COMPLETION(eth_fit_init_done);
+__initdata DECLARE_COMPLETION(eth_fit_init_done);
 
 static struct fit_context *CTX; 
 

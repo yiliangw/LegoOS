@@ -53,8 +53,7 @@
 #include "net/lwip/inet_chksum.h"
 #include "net/lwip/stats.h"
 #include "net/lwip/snmp.h"
-
-#include "lego/string.h"
+#include "net/lwip/string.h"
 
 /* Forward declarations.*/
 static void tcp_output_segment(struct tcp_seg *seg, struct tcp_pcb *pcb);

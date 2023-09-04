@@ -53,8 +53,7 @@
 #include "net/lwip/stats.h"
 #include "net/netif/etharp.h"
 #include "net/lwip/ip_frag.h"
-
-#include "lego/string.h"
+#include "net/lwip/string.h"
 
 struct memp {
   struct memp *next;

@@ -49,8 +49,7 @@
 #include "net/lwip/memp.h"
 #include "net/lwip/snmp.h"
 #include "net/lwip/tcp.h"
-
-#include "lego/string.h"
+#include "net/lwip/string.h"
 
 /* Incremented every coarse grained timer shot (typically every 500 ms). */
 u32_t tcp_ticks;

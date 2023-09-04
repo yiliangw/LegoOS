@@ -1,11 +1,21 @@
 #ifndef _INCLUDE_FIT_INTERNAL_H
 #define _INCLUDE_FIT_INTERNAL_H
-
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/types.h>
+#include <linux/semaphore.h>
+#include <linux/spinlock.h>
+#include <linux/time.h>
+#include <linux/printk.h>
+#include <linux/jiffies.h>
+#else
 #include <lego/types.h>
 #include <lego/semaphore.h>
 #include <lego/spinlock.h>
 #include <lego/time.h>
 #include <lego/printk.h>
+#include <lego/jiffies.h>
+#endif /* _LEGO_LINUX_MODULE_ */
+
 #include <net/lwip/ip_addr.h>
 #include <net/lwip/pbuf.h>
 #include "fit.h"
@@ -30,9 +40,13 @@
 #define fit_panic(fmt, ...) \
     panic(_FIT_LOG_PREFIX fmt, ##__VA_ARGS__)
 
-#define ARP_TMR_INTERVAL_MS     ARP_TMR_INTERVAL
-#define IP_TMR_INTERVAL_MS      IP_TMR_INTERVAL
-#define SEM_DOWN_TIMEOUT_MS     (MIN(ARP_TMR_INTERVAL_MS, IP_TMR_INTERVAL_MS) + 10)
+#define ARP_TMR_INTERVAL_MS   ARP_TMR_INTERVAL
+#define IP_TMR_INTERVAL_MS    IP_TMR_INTERVAL
+#define MIN_INTERVAL_MS       (ARP_TMR_INTERVAL_MS < IP_TMR_INTERVAL_MS ? \
+                                ARP_TMR_INTERVAL_MS : IP_TMR_INTERVAL_MS)
+#define ARP_TMR_INTERVAL_JIF  msecs_to_jiffies(ARP_TMR_INTERVAL_MS)
+#define IP_TMR_INTERVAL_JIF   msecs_to_jiffies(IP_TMR_INTERVAL_MS)
+#define MIN_IINTERVAL_JIF     msecs_to_jiffies(MIN_INTERVAL_MS)
 
 #if defined(CONFIG_FIT_CALL_TO_THPOOL) && CONFIG_FIT_CALL_TO_THPOOL
 #define FIT_CALL_TO_THPOOL

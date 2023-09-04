@@ -1,9 +1,25 @@
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/bitops.h>
+#include <linux/bug.h>
+#include <linux/errno.h>
+#include <linux/spinlock.h>
+#include <linux/semaphore.h>
+#include <linux/jiffies.h>
+#include <linux/printk.h>
+#include <linux/completion.h>
+#include <linux/delay.h>
+#include <linux/sched.h>
+#include <linux/kthread.h>
+#include <linux/types.h>
+#include <linux/bitmap.h>
+#include <linux/list.h>
+#include <linux/string.h>
+#else
 #include <lego/bitops.h>
 #include <lego/bug.h>
 #include <lego/errno.h>
 #include <lego/spinlock.h>
 #include <lego/semaphore.h>
-#include <lego/time.h>
 #include <lego/jiffies.h>
 #include <lego/printk.h>
 #include <lego/completion.h>
@@ -16,6 +32,7 @@
 #include <lego/fit_ibapi.h>
 #include <lego/comp_common.h>
 #include <lego/string.h>
+#endif /* _LEGO_LINUX_MODULE_ */
 
 #include <net/netif/etharp.h>
 #include <net/e1000.h>
@@ -41,7 +58,7 @@ const char e1000_netif_name[] = "en";
 static struct {
     ctx_t ctxs[FIT_NUM_CONTEXT];
     size_t num_ctx;
-    struct timespec ts_etharp, ts_ipreass;
+    unsigned long next_jif_etharp, next_jif_ipreass;
     struct netif e1000_netif;
     /* The free pbufs are produced by FIT client threads and consumed
        by the FIT polling thread. */
@@ -110,11 +127,6 @@ static void consume_free_pbuf(void)
         }
         atomic_set(&FPC->free_pbuf_head, head);
     }
-}
-
-static inline long __timespec_diff_ms(struct timespec *t1, struct timespec *t2)
-{
-    return (t1->tv_sec - t2->tv_sec) * 1000 + (t1->tv_nsec - t2->tv_nsec) / 1000000;
 }
 
 /**
@@ -650,15 +662,13 @@ poll_pending_output(void)
 static void
 poll_lwip(void)
 {
-    struct timespec ts;
-
-    ts = current_kernel_time();
-    if (__timespec_diff_ms(&ts, &FPC->ts_etharp) >= ARP_TMR_INTERVAL_MS) {
-        FPC->ts_etharp = ts;
+    unsigned long jif;
+    if (time_after(jif, FPC->next_jif_etharp)) {
+        FPC->next_jif_etharp = jif + msecs_to_jiffies(ARP_TMR_INTERVAL_MS);
         etharp_tmr();
     }
-    if (__timespec_diff_ms(&ts, &FPC->ts_ipreass) >= IP_TMR_INTERVAL_MS) {
-        FPC->ts_ipreass = ts;
+    if (time_after(jif, FPC->next_jif_ipreass)) {
+        FPC->next_jif_ipreass = jif + msecs_to_jiffies(IP_TMR_INTERVAL_MS);
         ip_reass_tmr();
     }
 }
@@ -779,16 +789,35 @@ handle_input(ctx_t *ctx, fit_node_t node, fit_port_t port,
     }
 }
 
+static unsigned long 
+__polling_sem_timeout_jif(void)
+{
+    unsigned long jif, etharp_diff, ipreass_diff;
+    const unsigned long min_diff = MIN_IINTERVAL_JIF;
+    jif = jiffies;
+    etharp_diff = FPC->next_jif_etharp - jif;
+    ipreass_diff = FPC->next_jif_ipreass - jif;
+    jif = etharp_diff < ipreass_diff ? etharp_diff : ipreass_diff;
+    if (jif > min_diff) {
+        /* Could be caused by wraparound or already timedout */ 
+        return 0;
+    }
+    return jif;
+}
+
 static int
 fit_polling_thread_fn(void *_arg)
 {
-    if (pin_current_thread())
-        fit_panic("Fail to pin FIT polling thread");
+    // if (pin_current_thread())
+    //     fit_panic("Fail to pin FIT polling thread");
 
-    FPC->ts_etharp = FPC->ts_ipreass = current_kernel_time();
+    FPC->next_jif_etharp = jiffies + ARP_TMR_INTERVAL_JIF;
+    FPC->next_jif_ipreass = jiffies + IP_TMR_INTERVAL_JIF;
 
     while (1) {
-        down(&FPC->polling_sem);
+        unsigned jif = __polling_sem_timeout_jif();
+        if (jif)
+            down_timeout(&FPC->polling_sem, jif);
         /* Consume the semahphore to 0 before polling the messages so that
           we will not miss any new notification. */
         while(down_trylock(&FPC->polling_sem) == 0);

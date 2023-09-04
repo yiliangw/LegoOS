@@ -51,8 +51,7 @@
 #include "net/lwip/stats.h"
 #include "net/lwip/snmp.h"
 #include "net/arch/perf.h"
-
-#include "lego/string.h"
+#include "net/lwip/string.h"
 
 /** The list of RAW PCBs */
 static struct raw_pcb *raw_pcbs;

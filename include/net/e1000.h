@@ -2,7 +2,12 @@
 #define LEGO_E1000_H
 #ifdef CONFIG_E1000
 
+#ifdef _LEGO_LINUX_MODULE_
+#include <linux/types.h>
+#else
 #include <lego/types.h>
+#endif /* _LEGO_LINUX_MODULE_ */
+
 #include <net/netif/etharp.h>
 
 extern void (*e1000_input_callback)(void);

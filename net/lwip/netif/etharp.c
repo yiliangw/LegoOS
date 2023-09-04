@@ -56,12 +56,12 @@
 #include "net/lwip/dhcp.h"
 #include "net/lwip/autoip.h"
 #include "net/netif/etharp.h"
+#include "net/lwip/string.h" 
 
 #if PPPOE_SUPPORT
 #include "net/netif/ppp_oe.h"
 #endif /* PPPOE_SUPPORT */
 
-#include "lego/string.h"
 
 /** the time an ARP entry stays valid after its last update,
  *  for ARP_TMR_INTERVAL = 5000, this is
@@ -972,9 +972,9 @@ etharp_query(struct netif *netif, struct ip_addr *ipaddr, struct pbuf *q)
 			}
 			/* packet could be taken over? */
 			if (p != NULL) {
+				struct etharp_q_entry *new_entry;
 				LWIP_DEBUGF(ETHARP_DEBUG, ("etharp_query queue packet\n"));
 				/* queue packet ... */
-				struct etharp_q_entry *new_entry;
 				/* allocate a new arp queue entry */
 				new_entry = memp_malloc(MEMP_ARP_QUEUE);
 				if (new_entry != NULL) {

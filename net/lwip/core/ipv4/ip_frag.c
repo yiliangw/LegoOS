@@ -47,8 +47,7 @@
 #include "net/lwip/snmp.h"
 #include "net/lwip/stats.h"
 #include "net/lwip/icmp.h"
-
-#include "lego/string.h"
+#include "net/lwip/string.h" 
 
 #if IP_REASSEMBLY
 /**

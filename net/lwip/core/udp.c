@@ -62,8 +62,7 @@
 #include "net/lwip/snmp.h"
 #include "net/arch/perf.h"
 #include "net/lwip/dhcp.h"
-
-#include "lego/string.h"
+#include "net/lwip/string.h" 
 
 /* The list of UDP PCBs */
 /* exported in udp.h (was static) */
