@@ -7,6 +7,7 @@
 #endif /* _LEGO_LINUX_MODULE_ */
 
 #include <lego/fit_ibapi.h>
+#include <net/lwip/init.h>
 #include "fit.h"
 #include "fit_internal.h"
 
@@ -69,9 +70,11 @@ int ethapi_get_node_id(void)
     return MY_NODE_ID;
 }
 
-int lego_eth_init(void *unused)
+int __init lego_eth_init(void *unused)
 {
     int ret;
+
+    lwip_init();
 
     ret = fit_init();
     if (ret)
@@ -88,4 +91,42 @@ int lego_eth_init(void *unused)
 err:
     pr_err("Ethernet FIT exit: %d\n", ret);
     return ret;
+}
+
+/* Compatibility layer */
+int ibapi_send_reply_imm(int target_node, void *addr, int size, void *ret_addr,
+        int max_ret_size, int if_use_ret_phys_addr)
+{
+    return ethapi_send_reply_imm(target_node, addr, size, ret_addr, max_ret_size,
+            if_use_ret_phys_addr);
+}
+
+int ibapi_send(int target_node, void *addr, int size)
+{
+    return ethapi_send(target_node, addr, size);
+} 
+
+int ibapi_send_reply_timeout(int target_node, void *addr, int size, 
+        void *ret_addr, int max_ret_size, int if_use_ret_phys_addr, 
+        unsigned long timeout_sec)
+{
+    return ethapi_send_reply_timeout(target_node, addr, size, ret_addr, 
+        max_ret_size, if_use_ret_phys_addr, timeout_sec);
+}
+
+int ibapi_receive_message(unsigned int designed_port, void *ret_addr,
+        int receive_size, uintptr_t *descriptor)
+{
+    return ethapi_receive_message(designed_port, ret_addr, receive_size, 
+        descriptor);
+}
+
+int ibapi_reply_message(void *addr, int size, uintptr_t descriptor)
+{
+    return ethapi_reply_message(addr, size, descriptor);
+}
+
+int ibapi_get_node_id(void)
+{
+    return ethapi_get_node_id();
 }

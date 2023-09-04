@@ -423,31 +423,3 @@ static void e1000_remove(struct pci_dev *pdev)
 {
 	e1000_warn("%s not implemented.", __func__);
 }
-
-#ifdef _LEGO_LINUX_MODULE_
-#include <linux/module.h>
-#include <linux/types.h>
-#include <linux/printk.h>
-
-EXPORT_SYMBOL(e1000_input_callback);
-EXPORT_SYMBOL(e1000_prepare);
-EXPORT_SYMBOL(e1000_transmit);
-EXPORT_SYMBOL(e1000_receive);
-EXPORT_SYMBOL(e1000_pending_reception);
-EXPORT_SYMBOL(e1000_clear_pending_reception);
-
-static int __init e1000_init_module(void)
-{
-    return e1000_init();
-}
-
-static void __exit e1000_exit_module(void)
-{
-	e1000_exit();
-}
-
-module_init(e1000_init_module);
-module_exit(e1000_exit_module);
-
-MODULE_LICENSE ("GPL");
-#endif /*_LEGO_LINUX_MODULE_ */

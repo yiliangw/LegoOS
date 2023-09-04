@@ -14,10 +14,12 @@
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/atomic.h>
+#include <linux/completion.h>
 #else
 #include <lego/types.h>
 #include <lego/errno.h>
 #include <lego/atomic.h>
+#include <lego/completion.h>
 #endif /* _LEGO_LINUX_MODULE_ */
 
 #include <net/arch/cc.h>
@@ -148,6 +150,9 @@ int sock_epoll_callback(int target_node, int port);
 #endif /* CONFIG_SOCKET_O_IB */
 
 #elif defined(CONFIG_ETHERNET_FIT) /* CONFIG_INFINIBAND_FIT */
+int lego_eth_init(void *unused);
+extern __initdata struct completion eth_fit_init_done;
+
 int ethapi_send_reply_imm(int target_node, void *addr, int size, void *ret_addr,
         int max_ret_size, int if_use_ret_phys_addr);
 int ethapi_send(int target_node, void *addr, int size);
@@ -158,26 +163,17 @@ int ethapi_receive_message(unsigned int designed_port, void *ret_addr,
 int ethapi_reply_message(void *addr, int size, uintptr_t descriptor);
 int ethapi_get_node_id(void);
 
-#define ibapi_reply_message(addr, size, descriptor) \
-	ethapi_reply_message(addr, size, descriptor)
+/* For compatibility */
+int ibapi_send_reply_imm(int target_node, void *addr, int size, void *ret_addr,
+        int max_ret_size, int if_use_ret_phys_addr);
+int ibapi_send(int target_node, void *addr, int size);
+int ibapi_send_reply_timeout(int target_node, void *addr, int size, void *ret_addr,
+        int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec);
+int ibapi_receive_message(unsigned int designed_port, void *ret_addr,
+        int receive_size, uintptr_t *descriptor);
+int ibapi_reply_message(void *addr, int size, uintptr_t descriptor);
+int ibapi_get_node_id(void);
 
-#define ibapi_receive_message(designed_port, ret_addr, receive_size, descriptor) \
-	ethapi_receive_message(designed_port, ret_addr, receive_size, descriptor)
-
-#define ibapi_send_reply_imm(target_node, addr, size, ret_addr, \
-		max_ret_size, if_use_ret_phys_addr) \
-	ethapi_send_reply_imm(target_node, addr, size, ret_addr, \
-		max_ret_size, if_use_ret_phys_addr)
-
-#define ibapi_send_reply_timeout(target_node, addr, size, ret_addr, \
-		max_ret_size, if_use_ret_phys_addr, timeout_sec) \
-	ethapi_send_reply_timeout(target_node, addr, size, ret_addr, \
-		max_ret_size, if_use_ret_phys_addr, timeout_sec)
-
-#define ibapi_send(target_node, addr, size) \
-	ethapi_send(target_node, addr, size)
-
-#define ibapi_get_node_id()	ethapi_get_node_id() 
 #endif /* CONFIG_INFINIBAND_FIT */
 
 #else /* CONFIG_FIT */

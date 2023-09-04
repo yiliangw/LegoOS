@@ -140,9 +140,7 @@ static int kernel_init(void *unused)
 	pci_subsys_init();
 	device_init();
 	dump_irq_domain_list();
-#if defined(CONFIG_LWIP)
-	lwip_init();
-#endif
+	
 #if defined(CONFIG_ETHERNET_FIT)
 	kthread_run(lego_eth_init, NULL, "eth-initd");
 
