@@ -9,6 +9,7 @@
 #include <linux/irq.h>
 #include <linux/irqdesc.h>
 #include <linux/mm.h>
+#include <linux/interrupt.h>
 #else
 #include <lego/device.h>
 #include <lego/dma-mapping.h>
@@ -406,7 +407,13 @@ static int e1000_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	// initialize DMA
 	pci_set_master(pdev);
-	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	{
+		int rc = dma_set_mask(&pdev->dev, DMA_BIT_MASK(64));
+		if (rc == 0)
+			dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64));
+		err = rc;
+	}
+	// err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
 	if (err) {
 		e1000_err("dma_set_mask_and_coherent: %d\n", err);
 		return err;

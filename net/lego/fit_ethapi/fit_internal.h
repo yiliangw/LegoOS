@@ -20,7 +20,7 @@
 #include <net/lwip/pbuf.h>
 #include "fit.h"
 
-#define FIT_LOG_LEVEL   LOGLEVEL_INFO
+#define FIT_LOG_LEVEL   3
 
 #define _FIT_LOG_PREFIX "FIT: "
 #define fit_log(level, fmt, ...) do { \
@@ -29,13 +29,13 @@
     } while (0)
 
 #define fit_err(fmt, ...) \
-    fit_log(LOGLEVEL_ERR, fmt, ##__VA_ARGS__)
+    fit_log(1, fmt, ##__VA_ARGS__)
 #define fit_warn(fmt, ...) \
-    fit_log(LOGLEVEL_WARNING, fmt, ##__VA_ARGS__)
-#define fit_debug(fmt, ...) \
-    fit_log(LOGLEVEL_DEBUG, fmt, ##__VA_ARGS__)
+    fit_log(2, fmt, ##__VA_ARGS__)
 #define fit_info(fmt, ...) \
-    fit_log(LOGLEVEL_INFO, fmt, ##__VA_ARGS__)
+    fit_log(3, fmt, ##__VA_ARGS__)
+#define fit_debug(fmt, ...) \
+    fit_log(4, fmt, ##__VA_ARGS__)
 
 #define fit_panic(fmt, ...) \
     panic(_FIT_LOG_PREFIX fmt, ##__VA_ARGS__)

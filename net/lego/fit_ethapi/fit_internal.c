@@ -662,7 +662,7 @@ poll_pending_output(void)
 static void
 poll_lwip(void)
 {
-    unsigned long jif;
+    unsigned long jif = jiffies;
     if (time_after(jif, FPC->next_jif_etharp)) {
         FPC->next_jif_etharp = jif + msecs_to_jiffies(ARP_TMR_INTERVAL_MS);
         etharp_tmr();

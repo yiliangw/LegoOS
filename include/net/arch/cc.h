@@ -4,7 +4,7 @@
 #ifdef _LEGO_LINUX_MODULE_
 #include <linux/types.h>
 #include <linux/printk.h>
-#include <linux/panic.h>
+#include <linux/kernel.h>
 #else
 #include <lego/types.h>
 #include <lego/printk.h>

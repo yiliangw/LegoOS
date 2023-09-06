@@ -1,3 +1,5 @@
+CONFIG_MODULE_SIG=n
+
 obj-m := ethfit.o
 
 LEGOOS_REL ?= ../../..
@@ -13,7 +15,7 @@ lego_lwip-obj += $(addprefix core/ipv4/, ip_addr.o icmp.o ip.o ip_frag.o inet_ch
 lego_lwip-obj += $(addprefix netif/, etharp.o loopif.o)
 lego_lwip-obj := $(addprefix $(LEGOOS_REL)/net/lwip/, $(lego_lwip-obj))
 
-lego_e1000-obj := $(addprefix $(LEGOOS_REL)/drivers/eth/, e1000.o) 
+lego_e1000-obj := $(addprefix $(LEGOOS_REL)/drivers/eth/, e1000.o)
 
 ethfit-y := $(lego_ethfit-obj) $(lego_lwip-obj) $(lego_e1000-obj) ethfit_main.o
 export ethfit-y
