@@ -289,7 +289,7 @@ long do_unlink(const char *pathname)
 
 	mutex_lock(&dir->i_mutex);
 	//error = vfs_unlink(dir, dentry, &tmp);
-	error = vfs_unlink(dir, dentry);
+	error = vfs_unlink(dir, dentry, NULL);
 	mutex_unlock(&dir->i_mutex);
 	path_put(&path);
 
@@ -545,7 +545,7 @@ retry:
 	if (old_path.mnt != new_path.mnt)
 		goto out_dput;
 
-	error = vfs_link(old_path.dentry, new_path.dentry->d_inode, new_dentry);
+	error = vfs_link(old_path.dentry, new_path.dentry->d_inode, new_dentry, NULL);
 	//error = vfs_link(old_path.dentry, new_path.dentry->d_inode, new_dentry, NULL);
 out_dput:
 	done_path_create(&new_path, new_dentry);

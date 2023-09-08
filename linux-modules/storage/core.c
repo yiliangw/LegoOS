@@ -20,7 +20,6 @@
 #include <linux/mutex.h>
 #include <linux/mm.h>
 
-#include "../fit/fit_config.h"
 #include "storage.h"
 #include "common.h"
 #include "stat.h"
@@ -218,7 +217,7 @@ static int __init init_storage_server(void)
 	struct task_struct *tsk __maybe_unused;
 	unsigned long populate __maybe_unused;
 
-	if (fit_state != FIT_MODULE_UP) {
+	if (fit_state != 1) {
 		pr_err("LegoOS FIT module is not ready.");
 		return -EIO;
 	}

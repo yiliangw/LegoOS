@@ -19,7 +19,6 @@
 #include <linux/kthread.h>
 #include <linux/hashtable.h>
 
-#include "../fit/fit_config.h"
 #include "storage.h"
 #include "common.h"
 
