@@ -108,7 +108,7 @@ int __init e1000_init(void)
 
 void e1000_exit(void)
 {
-	pci_unregister_driver(&e1000_driver);
+	e1000_warn("%s not implemented.", __func__);
 }
 
 int e1000_prepare(const void *src, size_t len, off_t offset)
