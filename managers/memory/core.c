@@ -46,7 +46,7 @@ void handle_bad_request(struct common_header *hdr, u64 desc)
 
 struct thpool_worker thpool_worker_map[NR_THPOOL_WORKERS];
 static int TW_HEAD __cacheline_aligned;
-static DEFINE_COMPLETION(thpool_init_completion);
+static DECLARE_COMPLETION(thpool_init_completion);
 
 /*
  * Pre-allocated thpool buffer

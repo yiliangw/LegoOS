@@ -37,14 +37,14 @@ struct completion {
 	{ 0, __WAIT_QUEUE_HEAD_INITIALIZER((work).wait) }
 
 /**
- * DEFINE_COMPLETION - define and initialize a completion structure
+ * DECLARE_COMPLETION - define and initialize a completion structure
  * @work:  identifier for the completion structure
  *
  * This macro defines and initializes a completion structure. Generally used
  * for static declarations. You should use the _ONSTACK variant for automatic
  * variables.
  */
-#define DEFINE_COMPLETION(work) \
+#define DECLARE_COMPLETION(work) \
 	struct completion work = COMPLETION_INITIALIZER(work)
 
 /**

@@ -101,7 +101,7 @@ static void inline setup_nr_cpu_ids(void)
 	nr_cpu_ids = find_last_bit(cpumask_bits(cpu_possible_mask), NR_CPUS) + 1;
 }
 
-static __initdata DEFINE_COMPLETION(kthreadd_done);
+static __initdata DECLARE_COMPLETION(kthreadd_done);
 
 int test_fit(void);
 

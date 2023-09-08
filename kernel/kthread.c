@@ -117,7 +117,7 @@ static struct task_struct *__kthread_create_on_node(int (*threadfn)(void *data),
 						    const char namefmt[],
 						    va_list args)
 {
-	DEFINE_COMPLETION(done);
+	DECLARE_COMPLETION(done);
 	struct task_struct *task;
 	struct kthread_create_info *create;
 

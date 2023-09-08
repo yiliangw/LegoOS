@@ -358,7 +358,7 @@ int restorer_worker_thread(void *unused)
  */
 struct task_struct *restore_process_snapshot(struct process_snapshot *pss)
 {
-	DEFINE_COMPLETION(done);
+	DECLARE_COMPLETION(done);
 	struct restorer_work_info info;
 	struct task_struct *result;
 
