@@ -496,7 +496,9 @@ ctx_find_handle(ctx_t *ctx, struct fit_rpc_id *rpcid)
 static int
 ctx_free_handle(ctx_t *ctx, struct fit_handle *handle)
 {
-    size_t idx = handle->id.__local_id;
+    size_t idx = handle - ctx->handles;
+    /* We should not use handle->id.__local_id here because
+       this is the local identity of the sender / caller. */
     
     if (handle->ctx != ctx || idx >= FIT_NUM_HANDLE) {
         fit_err("Invalid handle\n");
