@@ -407,6 +407,7 @@ ctx_init(ctx_t *ctx, fit_node_t node_id, u16 udp_port, fit_input_cb_t input)
     /* Hardcode the IP table*/
     IP4_ADDR(&ctx->node_ip_addr[0], 10, 0, 2, 15);
     IP4_ADDR(&ctx->node_ip_addr[1], 10, 0, 2, 16);
+    IP4_ADDR(&ctx->node_ip_addr[2], 10, 0, 2, 17);
 
     ctx->sequence_num = 0;
     spin_lock_init(&ctx->sequence_num_lock);
