@@ -5,7 +5,7 @@ storage-y := core.o handlers.o file_ops.o replica.o stat.o
 
 LEGO_INCLUDE := -I$(M)/../../include
 
-EXTRA_CFLAGS += -g $(LEGO_INCLUDE) -D_LEGO_STORAGE_SOURCE_
+EXTRA_CFLAGS += -g $(LEGO_INCLUDE) -D_LEGO_STORAGE_SOURCE_ -D_LEGO_LINUX_MODULE_ -I$(M)
 KBUILD_EXTRA_SYMBOLS += $(shell pwd)/../fit/eth/Module.symvers
 export KBUILD_EXTRA_SYMBOLS
 

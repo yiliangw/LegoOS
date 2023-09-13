@@ -10,7 +10,11 @@
 #ifndef _LEGO_RPC_OPCODE_H_
 #define _LEGO_RPC_OPCODE_H_
 
+#ifdef _LEGO_LINUX_MODULE_
+#include <unistd_64.h>
+#else
 #include <generated/unistd_64.h>
+#endif
 
 /*
  * Rules about our message opcodes:
