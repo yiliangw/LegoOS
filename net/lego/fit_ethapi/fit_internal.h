@@ -18,6 +18,7 @@
 
 #include <net/lwip/ip_addr.h>
 #include <net/lwip/pbuf.h>
+#include <net/lwip/tcp.h>
 #include "fit.h"
 
 #define FIT_LOG_LEVEL   3
@@ -29,9 +30,9 @@
     } while (0)
 
 #define fit_err(fmt, ...) \
-    fit_log(1, fmt, ##__VA_ARGS__)
-#define fit_warn(fmt, ...) \
-    fit_log(2, fmt, ##__VA_ARGS__)
+    fit_log(1, "[ERR] " fmt, ##__VA_ARGS__)
+#define fit_warn( fmt, ...) \
+    fit_log(2, "[WARN] " fmt, ##__VA_ARGS__)
 #define fit_info(fmt, ...) \
     fit_log(3, fmt, ##__VA_ARGS__)
 #define fit_debug(fmt, ...) \
@@ -53,7 +54,8 @@
 #include <memory/thread_pool.h>
 #endif
 
-#define FIT_UDP_PORT    6000U
+#define FIT_TCP_PORT_BASE 6000U
+#define FIT_PEER_PORT(node) (node + FIT_TCP_PORT_BASE)
 
 #define FIT_NUM_HANDLE      32U
 #define FIT_NUM_CONTEXT     1U
@@ -156,13 +158,28 @@ typedef void (*fit_input_cb_t)(
     off_t pbuf_off
 );
 
+enum fit_conn_state {
+    FIT_CONN_NONE = 0,
+    FIT_CONN_ERR,
+    FIT_CONN_CONNECTING,
+    FIT_CONN_SENDING,
+    FIT_CONN_IDLE,
+};
+
+struct fit_tpcb_info {
+    struct fit_context *ctx;
+    fit_node_t peer_id;
+    int active; /* Whether to set up the connection actively */
+    enum fit_conn_state state;
+};
+
 struct fit_context {
     /* Identity */
     fit_node_t id;
-    /* lwIP UDP context */
-    struct udp_pcb *pcb;
-    struct ip_addr node_ip_addr[FIT_NUM_NODE];
-    u16 udp_port;
+    /* lwIP TCP context */
+    struct ip_addr node_ip_addrs[FIT_NUM_NODE];
+    struct fit_tpcb_info conn_infos[FIT_NUM_NODE];
+    struct tcp_pcb *tpcbs[FIT_NUM_NODE];
     /* RPC sequence number */
     fit_seqnum_t sequence_num;
     spinlock_t sequence_num_lock;

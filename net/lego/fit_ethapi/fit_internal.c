@@ -38,7 +38,7 @@
 #include <net/e1000.h>
 
 #include <net/lwip/netif.h>
-#include <net/lwip/udp.h>
+#include <net/lwip/tcp.h>
 #include <net/lwip/ip_addr.h>
 #include <net/lwip/ip_frag.h>
 #include <net/lwip/pbuf.h>
@@ -331,7 +331,7 @@ lwipif_output(ctx_t *ctx, fit_port_t port, fit_node_t dst_node, fit_port_t dst_p
         fit_err("Invalid node number\n");
         return -EINVAL;
     }
-    dst_ip = &ctx->node_ip_addr[dst_node];
+    dst_ip = &ctx->node_ip_addrs[dst_node];
 
     p = pbuf_alloc(PBUF_TRANSPORT, hdr_len + len, PBUF_RAM);
     if (p == NULL) {
@@ -359,14 +359,36 @@ lwipif_output(ctx_t *ctx, fit_port_t port, fit_node_t dst_node, fit_port_t dst_p
     return 0;
 }
 
+static int ctx_connect_peer(ctx_t *ctx, fit_node_t peer_id, int active);
+
 static void
-lwipif_input_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, 
-    struct ip_addr *addr, u16_t port)
+__tcp_connecting_err_cb(void *arg, err_t err)
+{
+    struct fit_tpcb_info *info = (struct fit_tpcb_info *)arg;
+    ctx_t *ctx = info->ctx;
+    int ret;
+    
+    fit_warn("Connection to node %d failed: %d\n", info->peer_id, err);
+    info->state = FIT_CONN_ERR;
+
+    ret = ctx_connect_peer(ctx, info->peer_id, ctx->id > info->peer_id);
+    if (ret)
+        fit_panic("%s: Failed to set up connection with peer: %d\n", __func__, ret);
+}
+
+static void
+__tcp_connected_err_cb(void *arg, err_t err);
+
+static err_t
+__tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len);
+
+static err_t
+__tcp_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
     ctx_t *ctx = (ctx_t *)arg;
     struct fit_msg_hdr *hdr;
 
-    fit_debug("ctx[%d] received packet from port %d, length=%u\n", 
+    fit_debug("ctx[%d] received packet from port %d, length=%u\n",
         ctx->id, port, p->tot_len);
 
     hdr = (struct fit_msg_hdr *) p->payload;
@@ -380,6 +402,40 @@ lwipif_input_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         &hdr->rpc_id, p, sizeof(struct fit_msg_hdr));   
 }
 
+static err_t
+__tcp_connected_cb(void *arg, struct tcp_pcb *tpcb, err_t err)
+{
+    struct fit_tpcb_info *info = (struct fit_tpcb_info *)arg;
+    fit_debug("Connected to node %d\n", info->peer_id);
+
+    /* Set err callback to connected callback */
+    tcp_err(tpcb, __tcp_connected_err_cb);
+
+    info->state = FIT_CONN_IDLE;
+    // TODO: If there are relevant pending messages in the queue, send them out
+    __poke_polling_thread();
+
+    return ERR_OK;
+}
+
+static err_t
+__tcp_accepted_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
+{
+    struct fit_tpcb_info *info = (struct fit_tpcb_info *)arg;
+    fit_debug("Connected to node %d\n", info->peer_id);
+
+    tcp_arg(newpcb, info);
+    tcp_recv(newpcb, __tcp_recv_cb);
+    tcp_err(newpcb, __tcp_connected_err_cb);
+    tcp_sent(newpcb, __tcp_sent_cb);
+
+    info->state = FIT_CONN_IDLE;
+    // TODO: If there are relevant pending messages in the queue, send them out
+    __poke_polling_thread();
+
+    return ERR_OK;
+}
+
 /************************************************************************
  @} */ // end of group interface_fit_lwip
 
@@ -389,25 +445,99 @@ lwipif_input_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p,
  * @{
  ************************************************************************/
 static int
+ctx_connect_peer(ctx_t *ctx, fit_node_t peer_id, int active)
+{
+    struct tcp_pcb *tpcb;
+    struct fit_tpcb_info *info;
+    err_t err;
+
+    tpcb = tcp_new();
+    if (tpcb == NULL) {
+        fit_err("tcp_new()\n");
+        return -ENOMEM;
+    }
+    err = tcp_bind(tpcb, &ctx->node_ip_addrs[peer_id], FIT_PEER_PORT(peer_id));
+    if (err != ERR_OK) {
+        fit_err("tcp_bind(): %d\n", err);
+        return -ENOMEM;
+    }
+
+    info = &ctx->conn_infos[peer_id];
+    memset(info, 0, sizeof(*info));
+    info->ctx = ctx;
+    info->peer_id = peer_id;
+    info->active = active;
+    info->state = FIT_CONN_NONE;
+
+    if (active) {
+        tcp_arg(tpcb, info); // TODO: Initialize state
+        tcp_err(tpcb, __tcp_connecting_err_cb);
+        tcp_recv(tpcb, __tcp_recv_cb);
+        tcp_sent(tpcb, __tcp_sent_cb);
+        err = tcp_connect(tpcb, &ctx->node_ip_addrs[peer_id], 
+            FIT_PEER_PORT(peer_id), __tcp_connected_cb);
+        if (err != ERR_OK) {
+            fit_err("tcp_connect(): %d\n", err);
+            return -ENOMEM;
+        }
+    } else {
+        tpcb = tcp_listen(tpcb);
+        if (err != ERR_OK) {
+            fit_err("tcp_listen: %d\n", err);
+            return -ENOMEM;
+        }
+        info->active = 0;
+        tcp_accept(tpcb, __tcp_accepted_cb);
+        tcp_arg(tpcb, info); // TODO: Initialize state
+    }
+
+    info->state = FIT_CONN_CONNECTING;
+
+    return 0;
+}
+
+/**
+ * Set up TCP connection with peers.
+ * 
+ * @note This function should be called after the IP table is set up.
+ * 
+ */
+
+static int
+ctx_setup_connection(ctx_t *ctx)
+{
+    /*
+     * Rules:
+     * 1. Node with bigger ID set up the connection actively.
+     * 2. Node with smaller ID set up the connection passively. 
+     * 3. Set up connections in the ascending order of peer node ID.
+     *
+     * Reference: https://lwip.fandom.com/wiki/Raw/TCP
+     */
+    int i, ret;
+    const fit_node_t my_id = ctx->id;
+
+    /* Initialize TCP context without setting up the connection */
+    for (i = 0; i < FIT_NUM_NODE; i++) {
+        if (i == my_id)
+            continue;
+        ret = ctx_connect_peer(ctx, i, my_id > i);
+        if (ret)
+            fit_panic("Failed to set up connection with peer: %d\n", ret);
+    }
+    return 0;
+}
+
+static int
 ctx_init(ctx_t *ctx, fit_node_t node_id, u16 udp_port, fit_input_cb_t input)
 {
     memset(ctx, 0, sizeof(ctx_t));
     ctx->id = node_id;
 
-    /* Set up UDP */
-    ctx->udp_port = udp_port;
-    ctx->pcb = udp_new();
-    if (ctx->pcb == NULL) {
-        fit_err("Fail to create udp pcb\n");
-        return -ENOMEM;
-    }
-    udp_bind(ctx->pcb, IP_ADDR_ANY, ctx->udp_port);
-    udp_recv(ctx->pcb, lwipif_input_cb, ctx);
-    
     /* Hardcode the IP table*/
-    IP4_ADDR(&ctx->node_ip_addr[0], 10, 0, 2, 15);
-    IP4_ADDR(&ctx->node_ip_addr[1], 10, 0, 2, 16);
-    IP4_ADDR(&ctx->node_ip_addr[2], 10, 0, 2, 17);
+    IP4_ADDR(&ctx->node_ip_addrs[0], 10, 0, 2, 15);
+    IP4_ADDR(&ctx->node_ip_addrs[1], 10, 0, 2, 16);
+    IP4_ADDR(&ctx->node_ip_addrs[2], 10, 0, 2, 17);
 
     ctx->sequence_num = 0;
     spin_lock_init(&ctx->sequence_num_lock);
@@ -598,6 +728,8 @@ do_output_call(struct fit_handle *hdl)
         hdl->errno = ret;
         up(&hdl->sem); /* Notify the client of the failure */
     }
+    fit_info("Out Call [%d:%d](%d) errno:%d\n", hdl->ctx->id, hdl->remote_node, hdl->id.sequence_num, ret);
+    
     /* Else, we should notify the client after the reception of the reply
        or timeout */
     /* TODO: Add timeout mechanism for call. For simplicity, we can 
@@ -614,6 +746,7 @@ do_output_reply(struct fit_handle *hdl)
     hdl->errno = ret;
     /* Notify the client of the reply sending */
     up(&hdl->sem);
+    fit_info("Out Reply [%d:%d](%d) errno=%d\n", hdl->remote_node, hdl->ctx->id, hdl->id.sequence_num, ret);
     return ret;
 }
 
@@ -682,6 +815,9 @@ handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
     struct pbuf *pbuf, off_t data_off)
 {
     struct fit_handle *hdl;
+    
+    fit_info("In Call [%d:%d](%d)\n", node, ctx->id, rpc_id->sequence_num);
+    
     hdl = ctx_alloc_handle(ctx, rpc_id, 0);
     if (hdl == NULL) {
         fit_warn("Ran out of FIT handles.\n");
@@ -737,6 +873,9 @@ handle_input_reply(ctx_t *ctx, fit_node_t node, fit_port_t port,
     struct pbuf *pbuf, off_t data_off)
 {
     struct fit_handle *hdl;
+
+    fit_info("In Reply [%d:%d](%d)\n", ctx->id, node, rpc_id->sequence_num);
+
     hdl = ctx_find_handle(ctx, rpc_id);
     if (hdl == NULL) {
         /* Regard as a delayed reply */
