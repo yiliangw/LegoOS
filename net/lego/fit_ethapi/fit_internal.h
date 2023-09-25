@@ -95,7 +95,7 @@ struct fit_msg_hdr {
     fit_node_t dst_node;
     fit_port_t src_port;
     fit_port_t dst_port;
-    fit_msg_len_t length;
+    fit_msg_len_t length;   /* Including the header */
     fit_msg_type_t type;
     struct fit_rpc_id rpc_id;
 } __attribute__((packed));
@@ -158,6 +158,9 @@ typedef void (*fit_input_cb_t)(
     off_t pbuf_off
 );
 
+/**
+ * FIT connection state
+ */
 enum fit_conn_state {
     FIT_CONN_NONE = 0,
     FIT_CONN_ERR,
@@ -166,11 +169,20 @@ enum fit_conn_state {
     FIT_CONN_IDLE,
 };
 
-struct fit_tpcb_info {
+/**
+ * FIT connection 
+ */
+struct fit_conn {
     struct fit_context *ctx;
     fit_node_t peer_id;
     int active; /* Whether to set up the connection actively */
     enum fit_conn_state state;
+    
+    /* The buf for assembling complete FIT messages. It shoud be ensured
+       the message starts at offset 0 */
+    struct pbuf *msg_buf; 
+    int seen_hdr; /* Whether next message's header has been seen */
+    struct fit_msg_hdr msg_hdr;
 };
 
 struct fit_context {
@@ -178,7 +190,7 @@ struct fit_context {
     fit_node_t id;
     /* lwIP TCP context */
     struct ip_addr node_ip_addrs[FIT_NUM_NODE];
-    struct fit_tpcb_info conn_infos[FIT_NUM_NODE];
+    struct fit_conn conn_infos[FIT_NUM_NODE];
     struct tcp_pcb *tpcbs[FIT_NUM_NODE];
     /* RPC sequence number */
     fit_seqnum_t sequence_num;

@@ -130,28 +130,66 @@ static void consume_free_pbuf(void)
 }
 
 /**
- * Check should be performed before calling this function to ensure
- * the size of dst is enough.
+ * Cut the pbuf chain into two half at offset.
+ * 
+ * @return struct pbuf* The head of the second half
  */
-static void __copy_from_pbuf(void *dst, struct pbuf *p, off_t off)
+static int __pbuf_cut(struct pbuf *p, off_t off, 
+    struct pbuf **p1, struct pbuf **p2)
 {
-    struct pbuf *q;
-    off_t copied_len = 0;
-    for (q = p; q != NULL; q = q->next) {
-        if (off) {
-            if (off >= q->len) {
-                off -= q->len;
-                continue;
-            }
-            memcpy(dst /*+0*/, q->payload + off, q->len - off);
-            copied_len += q->len - off;
-            off = 0;
-        } else {
-            memcpy(dst + copied_len, q->payload, q->len);
-            copied_len += q->len;
-        }
+    struct pbuf *cut, *head1, *head2;
+    size_t len1, len2;
+    int ret;
+
+    if (off > p->tot_len) {
+        fit_warn("Trying to cut a pbuf(len=%d) at %lu\n", 
+            p->tot_len, off);
+        ret = -EINVAL;
+        goto err;
+    } else if (off == 0) {
+        *p1 = NULL;
+        *p2 = p;
+        return 0;
+    } else if (off == p->tot_len) {
+        *p1 = p;
+        *p2 = NULL;
+        return 0;
     }
+
+    len1 = off;
+    len2 = p->tot_len - off;
+
+    for (cut = p; cut->next != NULL && cut->next->tot_len > len2; 
+        cut = cut->next);
+
+    if (cut->next != NULL && cut->next->tot_len == len2) {
+        /* That's great. The cut coincides with a pbuf boundary */
+        head1 = p;
+        head2 = cut->next;
+        pbuf_ref(head2);
+        pbuf_realloc(head1, len1);
+    } else {
+        /* The cut happen in the cut pbuf */
+        const off_t cuf_off = cut->tot_len - len2;
+        head1 = p;
+        head2 = pbuf_alloc(PBUF_RAW, cut->len - cuf_off, PBUF_POOL);
+        if (head2 == NULL) {
+            fit_warn("%s: Failed to allocate pbuf\n", __func__);
+            ret = -ENOMEM;
+            goto err;
+        }
+        memcpy(head2->payload, cut->payload + cuf_off, cut->len - cuf_off);
+        pbuf_chain(head2, cut->next);
+        pbuf_realloc(head1, len1);
+    }
+    *p1 = head1;
+    *p2 = head2;
+    return 0;
+err:
+    *p1 = *p2 = NULL;
+    return ret;
 }
+
 
 /************************************************************************
  * @defgroup interface_lwip_e1000 LwIP's interface with E1000 driver
@@ -312,9 +350,9 @@ ip_err:
 /************************************************************************
  @} */ // end of group interface_lwip_e1000
 
+
 /************************************************************************
- * @defgroup interface_fit_lwip LwIP's interface with the FIT polling 
-            threead
+ * @defgroup fit_conn_utils FIT Connection Utilities
  * @{
  ***********************************************************************/
 static int
@@ -347,6 +385,7 @@ lwipif_output(ctx_t *ctx, fit_port_t port, fit_node_t dst_node, fit_port_t dst_p
     hdr->dst_node = dst_node;
     hdr->src_port = port;
     hdr->dst_port = dst_port;
+    hdr->length = hdr_len + len;
 
     memcpy(p->payload + hdr_len, msg, len);
     fit_debug("Sending packet\n");
@@ -359,12 +398,84 @@ lwipif_output(ctx_t *ctx, fit_port_t port, fit_node_t dst_node, fit_port_t dst_p
     return 0;
 }
 
+/**
+ * We received some real data from the stream. Check whether we can
+ * assemble packets to the upper layer. 
+ */
+static void
+conn_input(struct fit_conn *conn, struct pbuf *p)
+{
+    int ret;
+    ctx_t *ctx = conn->ctx;
+    
+    if (conn->msg_buf == NULL) {
+        conn->msg_buf = p;
+    } else {
+        pbuf_cat(conn->msg_buf, p);
+    }
+
+    while (1) { /* Assemble as many FIT messages as possible */
+        struct pbuf *msg;
+        struct fit_msg_hdr *hdr;
+        size_t msg_len;
+        size_t buf_len = (conn->msg_buf == NULL) ? 0 : 
+            conn->msg_buf->tot_len;
+
+        if (!conn->seen_hdr) { 
+            /* The complete header hasn't been seen yet */
+            if (buf_len < sizeof(struct fit_msg_hdr))
+                break; /* Still not forming a complete header */
+
+            /* We see a new FIT message header. */
+            /* In case that the header span accross multiple pbufs */
+            pbuf_copy_partial(conn->msg_buf, &conn->msg_hdr, 
+                sizeof(struct fit_msg_hdr), 0);
+            /* Do some check. But we cannot discard the packet right now if 
+            there is something wrong because the message may not be 
+            complete. */
+            if (conn->msg_hdr.dst_node != ctx->id) {
+                fit_warn("Received a apcket with unexpected dst_node(%d)\n", 
+                    conn->msg_hdr.dst_node);
+            }
+            if (conn->msg_hdr.src_node != conn->peer_id) {
+                fit_warn("Received a packet with unexpected src_node(%d) "
+                    "conn->peer_id(%d)\n", conn->msg_hdr.src_node, 
+                    conn->peer_id);
+            }
+        }
+
+        msg_len = conn->msg_hdr.length;
+        /* At this point, conn->msg_hdr shoud be valid */
+        if (buf_len < msg_len)
+            break; /* Still not forming a complete message */
+        
+        /* We see a new complete FIT message */
+        ret = __pbuf_cut(conn->msg_buf, msg_len, &msg, &conn->msg_buf);
+        conn->seen_hdr = 0; /* Reset */
+        if (ret)
+            fit_panic("");
+        
+        hdr = &conn->msg_hdr;
+        ctx->input(ctx, hdr->src_node, hdr->src_port, hdr->dst_port, 
+            hdr->type, &hdr->rpc_id, msg, sizeof(struct fit_msg_hdr));
+    }
+
+}
+/************************************************************************
+ @} */ // end of group fit_conn_utils
+
+
+/************************************************************************
+ * @defgroup interface_fit_lwip LwIP's interface with the FIT polling 
+            threead
+ * @{
+ ***********************************************************************/
 static int ctx_connect_peer(ctx_t *ctx, fit_node_t peer_id, int active);
 
 static void
 __tcp_connecting_err_cb(void *arg, err_t err)
 {
-    struct fit_tpcb_info *info = (struct fit_tpcb_info *)arg;
+    struct fit_conn *info = (struct fit_conn *)arg;
     ctx_t *ctx = info->ctx;
     int ret;
     
@@ -377,35 +488,53 @@ __tcp_connecting_err_cb(void *arg, err_t err)
 }
 
 static void
-__tcp_connected_err_cb(void *arg, err_t err);
+__tcp_connected_err_cb(void *arg, err_t err)
+{
+    // TODO: Handle possible errors
+    fit_panic("Unhandled TCP connected error: %d\n", err);
+}
 
 static err_t
-__tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len);
+__tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len)
+{
+
+}
+
+
 
 static err_t
 __tcp_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
-    ctx_t *ctx = (ctx_t *)arg;
-    struct fit_msg_hdr *hdr;
+    struct fit_conn *conn = (struct fit_conn *)arg;
+    u16_t pbuf_len;
 
-    fit_debug("ctx[%d] received packet from port %d, length=%u\n",
-        ctx->id, port, p->tot_len);
-
-    hdr = (struct fit_msg_hdr *) p->payload;
-    if (hdr->dst_node != ctx->id) {
-        fit_warn("Received packet with wrong destination node\n");
-        pbuf_free(p);
-        return;
+    if (p == NULL) { /* Remote host closed connection */
+        fit_panic("Remote host closed connection\n");
+        /* TODO: Close the local tcp connection and try to reconnect. */
+    }
+    if (err != ERR_OK) { /* Unknown reason */
+        fit_warn("%s: err=%d\n", __func__, err);
+        if (p != NULL)
+            pbuf_free(p);
+        return err;
     }
 
-    ctx->input(ctx, hdr->src_node, hdr->src_port, hdr->dst_port, hdr->type, 
-        &hdr->rpc_id, p, sizeof(struct fit_msg_hdr));   
+    /* 
+     * At this point, the ownership of the pbuf is passed to upper layer.
+     * We no longer care about it anymore. We should keep the length in
+     * advance.
+     */
+    pbuf_len = p->tot_len;
+    conn_input(conn, p);
+    tcp_recved(tpcb, pbuf_len);
+
+    return ERR_OK;
 }
 
 static err_t
 __tcp_connected_cb(void *arg, struct tcp_pcb *tpcb, err_t err)
 {
-    struct fit_tpcb_info *info = (struct fit_tpcb_info *)arg;
+    struct fit_conn *info = (struct fit_conn *)arg;
     fit_debug("Connected to node %d\n", info->peer_id);
 
     /* Set err callback to connected callback */
@@ -421,7 +550,7 @@ __tcp_connected_cb(void *arg, struct tcp_pcb *tpcb, err_t err)
 static err_t
 __tcp_accepted_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
 {
-    struct fit_tpcb_info *info = (struct fit_tpcb_info *)arg;
+    struct fit_conn *info = (struct fit_conn *)arg;
     fit_debug("Connected to node %d\n", info->peer_id);
 
     tcp_arg(newpcb, info);
@@ -448,7 +577,7 @@ static int
 ctx_connect_peer(ctx_t *ctx, fit_node_t peer_id, int active)
 {
     struct tcp_pcb *tpcb;
-    struct fit_tpcb_info *info;
+    struct fit_conn *info;
     err_t err;
 
     tpcb = tcp_new();
@@ -842,15 +971,13 @@ handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
 
     {
         void *buf;
-        size_t tot_len;
         int chain = pbuf->tot_len > pbuf->len;
         
-        tot_len = pbuf->tot_len - data_off;
         if (chain) {
             /* For compatability with thpool, we should malloc a continuous 
             buffer which is large enough. */
             buf = kmalloc(tot_len, GFP_KERNEL);
-            __copy_from_pbuf(buf, pbuf->payload, data_off);
+            pbuf_copy_partial(pbuf, buf, pbuf->tot_len - data_off, data_off);
         } else {
             buf = pbuf->payload + data_off;
         }
@@ -1103,7 +1230,7 @@ fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
         goto after_alloc_handle;
     }
 
-    __copy_from_pbuf(ret_addr, h->call.in_pbuf, h->call.in_off);
+    pbuf_copy_partial(h->call.in_pbuf, ret_addr, sz, h->call.in_off);
     produce_free_pbuf(h->call.in_pbuf);
     ret = 0;
 after_alloc_handle:
@@ -1144,7 +1271,8 @@ fit_recv(ctx_t *ctx, fit_port_t recv_port, fit_node_t *node,
         *port = hdl->remote_port;
         *handle = (uintptr_t)hdl;
         *sz = _sz;
-        __copy_from_pbuf(buf, hdl->recvcall.in_pbuf, hdl->recvcall.in_off);
+        pbuf_copy_partial(hdl->recvcall.in_pbuf, buf, _sz, 
+            hdl->recvcall.in_off);
         produce_free_pbuf(hdl->recvcall.in_pbuf);
         /* Cannot free the handle here because the corresponding reply 
            will depend on it. Do it in fit_reply(). */
