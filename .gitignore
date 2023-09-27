@@ -4,6 +4,8 @@
 *.i
 *.bin
 *.elf
+*.log
+*.mod
 
 #
 # Generated include files

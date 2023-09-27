@@ -64,10 +64,14 @@ static int procmgmt(void *unused)
 #endif
 
 #if 1
-	init_filename = "/usr/bin/python";
+	init_filename = "/bin/uname";
 	argv_init[0] = init_filename;
-	argv_init[1] = "/root/ys/models-1.4.0/official/resnet/cifar10_main.py";
+	argv_init[1] = "-r";
 #endif
+
+	pr_info("====================\n");
+	pr_info("init_filename: %s\n", init_filename);
+	pr_info("====================\n");
 
 	/*
 	 * If vNode is configured, which implies GPM is also configured,

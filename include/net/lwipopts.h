@@ -21,6 +21,8 @@ void *memcpy(void *dst, const void *src, size_t n);
 //#define SYS_LIGHTWEIGHT_PROT	1
 #define LWIP_PROVIDE_ERRNO      1
 
+#define LWIP_TCP_KEEPALIVE    1
+
 // Various tuning knobs, see:
 // http://lists.gnu.org/archive/html/lwip-users/2006-11/msg00007.html
 
@@ -51,7 +53,7 @@ void *memcpy(void *dst, const void *src, size_t n);
 
 // Print error messages when we run out of memory
 #define LWIP_DEBUG	1
-#define TCP_DEBUG	    LWIP_DBG_OFF
+#define TCP_DEBUG	    LWIP_DBG_ON
 #define UDP_DEBUG       LWIP_DBG_OFF
 #define IP_DEBUG        LWIP_DBG_OFF
 #define ETHARP_DEBUG    LWIP_DBG_OFF

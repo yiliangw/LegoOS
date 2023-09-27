@@ -8,7 +8,7 @@ export LEGOOS_REL
 export LEGOOS_ABS
 
 ifeq ($(ethfit-y),)
-lego_ethfit-obj := $(addprefix $(LEGOOS_REL)/net/lego/fit_ethapi/, fit_ethapi.o fit_internal.o)
+lego_ethfit-obj := $(addprefix $(LEGOOS_REL)/net/lego/fit_ethapi/, fit_api.o fit_conn.o fit_context.o fit_internal.o fit_utils.o)
 
 lego_lwip-obj := $(addprefix core/, init.o tcp_in.o dhcp.o mem.o memp.o netif.o pbuf.o raw.o stats.o sys.o tcp.o tcp_out.o udp.o dns.o)
 lego_lwip-obj += $(addprefix core/ipv4/, ip_addr.o icmp.o ip.o ip_frag.o inet_chksum.o inet.o)

@@ -1,20 +1,12 @@
-#ifdef _LEGO_LINUX_MODULE_
-#include <linux/errno.h>
-#include <linux/completion.h>
-#else
-#include <lego/errno.h>
-#include <lego/completion.h>
-#endif /* _LEGO_LINUX_MODULE_ */
-
 #include <lego/fit_ibapi.h>
 #include <net/lwip/init.h>
 #include "fit.h"
 #include "fit_internal.h"
+#include "fit_sys.h"
 
 __initdata DECLARE_COMPLETION(eth_fit_init_done);
 
 static struct fit_context *CTX; 
-
 
 int ethapi_send_reply_timeout(int target_node, void *addr, int size, void *ret_addr,
         int max_ret_size, int if_use_ret_phys_addr, unsigned long timeout_sec)
@@ -80,7 +72,7 @@ int __init lego_eth_init(void *unused)
     if (ret)
         goto err;
 
-    CTX = fit_new_context(MY_NODE_ID, FIT_UDP_PORT); 
+    CTX = fit_new_context(MY_NODE_ID); 
 
     ret = fit_dispatch();
     if (ret)

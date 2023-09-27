@@ -1,39 +1,9 @@
-#ifdef _LEGO_LINUX_MODULE_
-#include <linux/bitops.h>
-#include <linux/bug.h>
-#include <linux/errno.h>
-#include <linux/spinlock.h>
-#include <linux/semaphore.h>
-#include <linux/jiffies.h>
-#include <linux/printk.h>
-#include <linux/completion.h>
-#include <linux/delay.h>
-#include <linux/sched.h>
-#include <linux/kthread.h>
-#include <linux/types.h>
-#include <linux/bitmap.h>
-#include <linux/list.h>
-#include <linux/string.h>
-#else
-#include <lego/bitops.h>
-#include <lego/bug.h>
-#include <lego/errno.h>
-#include <lego/spinlock.h>
-#include <lego/semaphore.h>
-#include <lego/jiffies.h>
-#include <lego/printk.h>
-#include <lego/completion.h>
-#include <lego/delay.h>
-#include <lego/sched.h>
-#include <lego/kthread.h>
-#include <lego/types.h>
-#include <lego/bitmap.h>
-#include <lego/list.h>
-#include <lego/fit_ibapi.h>
-#include <lego/comp_common.h>
-#include <lego/string.h>
-#endif /* _LEGO_LINUX_MODULE_ */
+#include "fit.h"
+#include "fit_conn.h"
+#include "fit_sys.h"
+#include "fit_context.h"
 
+#include "fit_types.h"
 #include <net/netif/etharp.h>
 #include <net/e1000.h>
 
@@ -44,8 +14,6 @@
 #include <net/lwip/pbuf.h>
 
 #include "fit_internal.h"
-
-typedef struct fit_context ctx_t;
 
 const char e1000_netif_name[] = "en";
 /**
@@ -58,7 +26,9 @@ const char e1000_netif_name[] = "en";
 static struct {
     ctx_t ctxs[FIT_NUM_CONTEXT];
     size_t num_ctx;
-    unsigned long next_jif_etharp, next_jif_ipreass;
+    struct {
+        unsigned long etharp, ipreass, tcp;
+    } next_jif;
     struct netif e1000_netif;
     /* The free pbufs are produced by FIT client threads and consumed
        by the FIT polling thread. */
@@ -85,7 +55,7 @@ static struct {
  *       is prepared. For example, it should not be called before the
  *       output is queued in the output queue of a FIT context.
  */
-static void __poke_polling_thread(void)
+void fit_poke_polling_thread(void)
 {
     if (FPC->polling_sem.count > 0)
         return;
@@ -100,7 +70,7 @@ static void produce_free_pbuf(struct pbuf *pbuf)
         if (tail == atomic_read(&FPC->free_pbuf_head) - 1) { /* Full */
             fit_warn("Ran out of free pbuf slots\n");
             /* Notify the polling thread to clean up */
-            __poke_polling_thread();
+            fit_poke_polling_thread();
             set_current_state(TASK_INTERRUPTIBLE);
             schedule();
         } else {
@@ -129,67 +99,6 @@ static void consume_free_pbuf(void)
     }
 }
 
-/**
- * Cut the pbuf chain into two half at offset.
- * 
- * @return struct pbuf* The head of the second half
- */
-static int __pbuf_cut(struct pbuf *p, off_t off, 
-    struct pbuf **p1, struct pbuf **p2)
-{
-    struct pbuf *cut, *head1, *head2;
-    size_t len1, len2;
-    int ret;
-
-    if (off > p->tot_len) {
-        fit_warn("Trying to cut a pbuf(len=%d) at %lu\n", 
-            p->tot_len, off);
-        ret = -EINVAL;
-        goto err;
-    } else if (off == 0) {
-        *p1 = NULL;
-        *p2 = p;
-        return 0;
-    } else if (off == p->tot_len) {
-        *p1 = p;
-        *p2 = NULL;
-        return 0;
-    }
-
-    len1 = off;
-    len2 = p->tot_len - off;
-
-    for (cut = p; cut->next != NULL && cut->next->tot_len > len2; 
-        cut = cut->next);
-
-    if (cut->next != NULL && cut->next->tot_len == len2) {
-        /* That's great. The cut coincides with a pbuf boundary */
-        head1 = p;
-        head2 = cut->next;
-        pbuf_ref(head2);
-        pbuf_realloc(head1, len1);
-    } else {
-        /* The cut happen in the cut pbuf */
-        const off_t cuf_off = cut->tot_len - len2;
-        head1 = p;
-        head2 = pbuf_alloc(PBUF_RAW, cut->len - cuf_off, PBUF_POOL);
-        if (head2 == NULL) {
-            fit_warn("%s: Failed to allocate pbuf\n", __func__);
-            ret = -ENOMEM;
-            goto err;
-        }
-        memcpy(head2->payload, cut->payload + cuf_off, cut->len - cuf_off);
-        pbuf_chain(head2, cut->next);
-        pbuf_realloc(head1, len1);
-    }
-    *p1 = head1;
-    *p2 = head2;
-    return 0;
-err:
-    *p1 = *p2 = NULL;
-    return ret;
-}
-
 
 /************************************************************************
  * @defgroup interface_lwip_e1000 LwIP's interface with E1000 driver
@@ -202,7 +111,7 @@ err:
 static void 
 e1000if_input_callback(void)
 {
-    __poke_polling_thread();
+    fit_poke_polling_thread();
 }
 
 static int
@@ -352,472 +261,6 @@ ip_err:
 
 
 /************************************************************************
- * @defgroup fit_conn_utils FIT Connection Utilities
- * @{
- ***********************************************************************/
-static int
-lwipif_output(ctx_t *ctx, fit_port_t port, fit_node_t dst_node, fit_port_t dst_port, 
-    enum fit_msg_type type, struct fit_rpc_id *rpc_id, void *msg, size_t len)
-{
-    struct pbuf *p;
-    int ret;
-    struct ip_addr *dst_ip;
-    struct fit_msg_hdr *hdr;
-    const size_t hdr_len = sizeof(struct fit_msg_hdr);
-
-    if (dst_node >= FIT_NUM_NODE) {
-        fit_err("Invalid node number\n");
-        return -EINVAL;
-    }
-    dst_ip = &ctx->node_ip_addrs[dst_node];
-
-    p = pbuf_alloc(PBUF_TRANSPORT, hdr_len + len, PBUF_RAM);
-    if (p == NULL) {
-        fit_err("Failed to allocate pbuf\n");
-        return -ENOMEM;
-    }
-
-    /* set FIT header */
-    hdr = (struct fit_msg_hdr *)p->payload;
-    hdr->rpc_id = *rpc_id;
-    hdr->type = type;
-    hdr->src_node = ctx->id;
-    hdr->dst_node = dst_node;
-    hdr->src_port = port;
-    hdr->dst_port = dst_port;
-    hdr->length = hdr_len + len;
-
-    memcpy(p->payload + hdr_len, msg, len);
-    fit_debug("Sending packet\n");
-    ret = udp_sendto(ctx->pcb, p, dst_ip, FIT_UDP_PORT);
-    if (ret) {
-        fit_err("Failed to send packet\n");
-        return ret;
-    }
-    pbuf_free(p);
-    return 0;
-}
-
-/**
- * We received some real data from the stream. Check whether we can
- * assemble packets to the upper layer. 
- */
-static void
-conn_input(struct fit_conn *conn, struct pbuf *p)
-{
-    int ret;
-    ctx_t *ctx = conn->ctx;
-    
-    if (conn->msg_buf == NULL) {
-        conn->msg_buf = p;
-    } else {
-        pbuf_cat(conn->msg_buf, p);
-    }
-
-    while (1) { /* Assemble as many FIT messages as possible */
-        struct pbuf *msg;
-        struct fit_msg_hdr *hdr;
-        size_t msg_len;
-        size_t buf_len = (conn->msg_buf == NULL) ? 0 : 
-            conn->msg_buf->tot_len;
-
-        if (!conn->seen_hdr) { 
-            /* The complete header hasn't been seen yet */
-            if (buf_len < sizeof(struct fit_msg_hdr))
-                break; /* Still not forming a complete header */
-
-            /* We see a new FIT message header. */
-            /* In case that the header span accross multiple pbufs */
-            pbuf_copy_partial(conn->msg_buf, &conn->msg_hdr, 
-                sizeof(struct fit_msg_hdr), 0);
-            /* Do some check. But we cannot discard the packet right now if 
-            there is something wrong because the message may not be 
-            complete. */
-            if (conn->msg_hdr.dst_node != ctx->id) {
-                fit_warn("Received a apcket with unexpected dst_node(%d)\n", 
-                    conn->msg_hdr.dst_node);
-            }
-            if (conn->msg_hdr.src_node != conn->peer_id) {
-                fit_warn("Received a packet with unexpected src_node(%d) "
-                    "conn->peer_id(%d)\n", conn->msg_hdr.src_node, 
-                    conn->peer_id);
-            }
-        }
-
-        msg_len = conn->msg_hdr.length;
-        /* At this point, conn->msg_hdr shoud be valid */
-        if (buf_len < msg_len)
-            break; /* Still not forming a complete message */
-        
-        /* We see a new complete FIT message */
-        ret = __pbuf_cut(conn->msg_buf, msg_len, &msg, &conn->msg_buf);
-        conn->seen_hdr = 0; /* Reset */
-        if (ret)
-            fit_panic("");
-        
-        hdr = &conn->msg_hdr;
-        ctx->input(ctx, hdr->src_node, hdr->src_port, hdr->dst_port, 
-            hdr->type, &hdr->rpc_id, msg, sizeof(struct fit_msg_hdr));
-    }
-
-}
-/************************************************************************
- @} */ // end of group fit_conn_utils
-
-
-/************************************************************************
- * @defgroup interface_fit_lwip LwIP's interface with the FIT polling 
-            threead
- * @{
- ***********************************************************************/
-static int ctx_connect_peer(ctx_t *ctx, fit_node_t peer_id, int active);
-
-static void
-__tcp_connecting_err_cb(void *arg, err_t err)
-{
-    struct fit_conn *info = (struct fit_conn *)arg;
-    ctx_t *ctx = info->ctx;
-    int ret;
-    
-    fit_warn("Connection to node %d failed: %d\n", info->peer_id, err);
-    info->state = FIT_CONN_ERR;
-
-    ret = ctx_connect_peer(ctx, info->peer_id, ctx->id > info->peer_id);
-    if (ret)
-        fit_panic("%s: Failed to set up connection with peer: %d\n", __func__, ret);
-}
-
-static void
-__tcp_connected_err_cb(void *arg, err_t err)
-{
-    // TODO: Handle possible errors
-    fit_panic("Unhandled TCP connected error: %d\n", err);
-}
-
-static err_t
-__tcp_sent_cb(void *arg, struct tcp_pcb *tpcb, u16_t len)
-{
-
-}
-
-
-
-static err_t
-__tcp_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
-{
-    struct fit_conn *conn = (struct fit_conn *)arg;
-    u16_t pbuf_len;
-
-    if (p == NULL) { /* Remote host closed connection */
-        fit_panic("Remote host closed connection\n");
-        /* TODO: Close the local tcp connection and try to reconnect. */
-    }
-    if (err != ERR_OK) { /* Unknown reason */
-        fit_warn("%s: err=%d\n", __func__, err);
-        if (p != NULL)
-            pbuf_free(p);
-        return err;
-    }
-
-    /* 
-     * At this point, the ownership of the pbuf is passed to upper layer.
-     * We no longer care about it anymore. We should keep the length in
-     * advance.
-     */
-    pbuf_len = p->tot_len;
-    conn_input(conn, p);
-    tcp_recved(tpcb, pbuf_len);
-
-    return ERR_OK;
-}
-
-static err_t
-__tcp_connected_cb(void *arg, struct tcp_pcb *tpcb, err_t err)
-{
-    struct fit_conn *info = (struct fit_conn *)arg;
-    fit_debug("Connected to node %d\n", info->peer_id);
-
-    /* Set err callback to connected callback */
-    tcp_err(tpcb, __tcp_connected_err_cb);
-
-    info->state = FIT_CONN_IDLE;
-    // TODO: If there are relevant pending messages in the queue, send them out
-    __poke_polling_thread();
-
-    return ERR_OK;
-}
-
-static err_t
-__tcp_accepted_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
-{
-    struct fit_conn *info = (struct fit_conn *)arg;
-    fit_debug("Connected to node %d\n", info->peer_id);
-
-    tcp_arg(newpcb, info);
-    tcp_recv(newpcb, __tcp_recv_cb);
-    tcp_err(newpcb, __tcp_connected_err_cb);
-    tcp_sent(newpcb, __tcp_sent_cb);
-
-    info->state = FIT_CONN_IDLE;
-    // TODO: If there are relevant pending messages in the queue, send them out
-    __poke_polling_thread();
-
-    return ERR_OK;
-}
-
-/************************************************************************
- @} */ // end of group interface_fit_lwip
-
-
-/************************************************************************
- * @defgroup fit_ctx_utils FIT Context Utilities
- * @{
- ************************************************************************/
-static int
-ctx_connect_peer(ctx_t *ctx, fit_node_t peer_id, int active)
-{
-    struct tcp_pcb *tpcb;
-    struct fit_conn *info;
-    err_t err;
-
-    tpcb = tcp_new();
-    if (tpcb == NULL) {
-        fit_err("tcp_new()\n");
-        return -ENOMEM;
-    }
-    err = tcp_bind(tpcb, &ctx->node_ip_addrs[peer_id], FIT_PEER_PORT(peer_id));
-    if (err != ERR_OK) {
-        fit_err("tcp_bind(): %d\n", err);
-        return -ENOMEM;
-    }
-
-    info = &ctx->conn_infos[peer_id];
-    memset(info, 0, sizeof(*info));
-    info->ctx = ctx;
-    info->peer_id = peer_id;
-    info->active = active;
-    info->state = FIT_CONN_NONE;
-
-    if (active) {
-        tcp_arg(tpcb, info); // TODO: Initialize state
-        tcp_err(tpcb, __tcp_connecting_err_cb);
-        tcp_recv(tpcb, __tcp_recv_cb);
-        tcp_sent(tpcb, __tcp_sent_cb);
-        err = tcp_connect(tpcb, &ctx->node_ip_addrs[peer_id], 
-            FIT_PEER_PORT(peer_id), __tcp_connected_cb);
-        if (err != ERR_OK) {
-            fit_err("tcp_connect(): %d\n", err);
-            return -ENOMEM;
-        }
-    } else {
-        tpcb = tcp_listen(tpcb);
-        if (err != ERR_OK) {
-            fit_err("tcp_listen: %d\n", err);
-            return -ENOMEM;
-        }
-        info->active = 0;
-        tcp_accept(tpcb, __tcp_accepted_cb);
-        tcp_arg(tpcb, info); // TODO: Initialize state
-    }
-
-    info->state = FIT_CONN_CONNECTING;
-
-    return 0;
-}
-
-/**
- * Set up TCP connection with peers.
- * 
- * @note This function should be called after the IP table is set up.
- * 
- */
-
-static int
-ctx_setup_connection(ctx_t *ctx)
-{
-    /*
-     * Rules:
-     * 1. Node with bigger ID set up the connection actively.
-     * 2. Node with smaller ID set up the connection passively. 
-     * 3. Set up connections in the ascending order of peer node ID.
-     *
-     * Reference: https://lwip.fandom.com/wiki/Raw/TCP
-     */
-    int i, ret;
-    const fit_node_t my_id = ctx->id;
-
-    /* Initialize TCP context without setting up the connection */
-    for (i = 0; i < FIT_NUM_NODE; i++) {
-        if (i == my_id)
-            continue;
-        ret = ctx_connect_peer(ctx, i, my_id > i);
-        if (ret)
-            fit_panic("Failed to set up connection with peer: %d\n", ret);
-    }
-    return 0;
-}
-
-static int
-ctx_init(ctx_t *ctx, fit_node_t node_id, u16 udp_port, fit_input_cb_t input)
-{
-    memset(ctx, 0, sizeof(ctx_t));
-    ctx->id = node_id;
-
-    /* Hardcode the IP table*/
-    IP4_ADDR(&ctx->node_ip_addrs[0], 10, 0, 2, 15);
-    IP4_ADDR(&ctx->node_ip_addrs[1], 10, 0, 2, 16);
-    IP4_ADDR(&ctx->node_ip_addrs[2], 10, 0, 2, 17);
-
-    ctx->sequence_num = 0;
-    spin_lock_init(&ctx->sequence_num_lock);
-
-    spin_lock_init(&ctx->handles_lock);
-
-    INIT_LIST_HEAD(&ctx->input_q);
-    INIT_LIST_HEAD(&ctx->output_q);
-    spin_lock_init(&ctx->input_q_lock);
-    spin_lock_init(&ctx->output_q_lock);
-
-    sema_init(&ctx->input_sem, 0);
-
-    ctx->input = input;
-    return 0;
-}
-
-static fit_seqnum_t
-ctx_alloc_sequence_num(ctx_t *ctx)
-{
-    fit_seqnum_t num;
-    spin_lock(&ctx->sequence_num_lock);
-    num = ctx->sequence_num++;
-    spin_unlock(&ctx->sequence_num_lock);
-    return num;
-}
-
-/**
- * Alloc a handle for the specified RPC ID. If rpcid is NULL, 
- * create a new RPC ID.
- */
-static struct fit_handle *
-ctx_alloc_handle(ctx_t *ctx, struct fit_rpc_id *rpcid, int alloc_seqnum)
-{
-    unsigned int i;
-    fit_seqnum_t seqnum;
-    struct fit_handle *hdl;
-    
-    spin_lock(&ctx->handles_lock);
-    i = find_first_zero_bit(ctx->handles_bitmap, FIT_NUM_HANDLE);
-    if (i == FIT_NUM_HANDLE) {
-        fit_warn("Run out of FIT handles.\n");
-        hdl = NULL;
-    } else {
-        set_bit(i, ctx->handles_bitmap);
-        hdl = &ctx->handles[i];
-    }
-    spin_unlock(&ctx->handles_lock);
-
-    if (hdl) {
-        memset(hdl, 0, sizeof(struct fit_handle));
-        hdl->ctx = ctx;
-        if (rpcid) {
-            hdl->id = *rpcid;
-        } else {
-            seqnum = alloc_seqnum ? ctx_alloc_sequence_num(ctx) : 0;
-            hdl->id.fit_node = ctx->id;
-            hdl->id.sequence_num = seqnum;
-            hdl->id.__local_id = i;
-        }
-    }
-    return hdl;
-}
-
-/**
- * @warning This function does not lock handles_lock. 
- */
-static struct fit_handle *
-ctx_find_handle(ctx_t *ctx, struct fit_rpc_id *rpcid)
-{
-    struct fit_handle *hdl;
-    size_t idx = rpcid->__local_id;
-    
-    if (idx >= FIT_NUM_HANDLE || !test_bit(idx, ctx->handles_bitmap))
-        return NULL;
-    hdl = &ctx->handles[idx];
-
-    /* Further check sequence number */
-    if (hdl->id.fit_node != rpcid->fit_node || 
-        hdl->id.sequence_num != rpcid->sequence_num)
-        return NULL;
-
-    return hdl;
-}
-
-static int
-ctx_free_handle(ctx_t *ctx, struct fit_handle *handle)
-{
-    size_t idx = handle - ctx->handles;
-    /* We should not use handle->id.__local_id here because
-       this is the local identity of the sender / caller. */
-    
-    if (handle->ctx != ctx || idx >= FIT_NUM_HANDLE) {
-        fit_err("Invalid handle\n");
-        return -EINVAL;
-    }
-    /* We do not need to lock here */
-    handle->id.sequence_num = 0;
-    if (test_and_clear_bit(idx, ctx->handles_bitmap) == 0) {
-        fit_err("Freeing a free recv handle\n");
-        return -EPERM;
-    }
-
-    return 0;
-}
-
-static int
-ctx_enque_input(ctx_t *ctx, struct fit_handle *handle)
-{
-    spin_lock(&ctx->input_q_lock);
-    list_add_tail(&handle->qnode, &ctx->input_q);
-    spin_unlock(&ctx->input_q_lock);
-    up(&ctx->input_sem);
-    return 0;
-}
-
-static int
-ctx_enque_output(ctx_t *ctx, struct fit_handle *handle)
-{
-    spin_lock(&ctx->output_q_lock);
-    list_add_tail(&handle->qnode, &ctx->output_q);
-    spin_unlock(&ctx->output_q_lock);
-    return 0;
-}
-
-static int
-ctx_deque_input(ctx_t *ctx, struct fit_handle **phandle)
-{
-    struct fit_handle *hdl;
-    if (down_interruptible(&ctx->input_sem))
-        return -EINTR;
-    spin_lock(&ctx->input_q_lock);
-    hdl = list_first_entry(&ctx->input_q, struct fit_handle, qnode);
-    list_del_init(&hdl->qnode);
-    spin_unlock(&ctx->input_q_lock);
-    *phandle = hdl;
-    return 0;
-}
-
-static void
-ctx_deque_all_output(ctx_t *ctx, struct list_head *head)
-{
-    spin_lock(&ctx->output_q_lock);
-    list_splice_init(&ctx->output_q, head);
-    spin_unlock(&ctx->output_q_lock);
-}
-/************************************************************************
- @} */ // end of fit_ctx_utils
-
-
-/************************************************************************
  * @defgroup fit_polling Main Polling Logic of FIT
  * @{
  ************************************************************************/
@@ -850,15 +293,21 @@ static int
 do_output_call(struct fit_handle *hdl)
 {
     int ret;
-    ret = lwipif_output(hdl->ctx, hdl->local_port,
-        hdl->remote_node, hdl->remote_port,
-        FIT_MSG_CALL, &hdl->id, hdl->call.out_addr, hdl->call.out_len);
+    ctx_t *ctx = hdl->ctx;
+
+    fit_node_t peer = hdl->remote_node;
+    struct fit_conn *conn = &ctx->conns[peer];
+
+    hdl->errno = 0;
+    ret = conn_send(conn, &hdl->id, FIT_MSG_CALL, hdl->local_port,
+        hdl->remote_node, hdl->remote_port, hdl->call.out_addr,
+        hdl->call.out_len, NULL, NULL);
+
     if (ret) {
         hdl->errno = ret;
         up(&hdl->sem); /* Notify the client of the failure */
     }
-    fit_info("Out Call [%d:%d](%d) errno:%d\n", hdl->ctx->id, hdl->remote_node, hdl->id.sequence_num, ret);
-    
+
     /* Else, we should notify the client after the reception of the reply
        or timeout */
     /* TODO: Add timeout mechanism for call. For simplicity, we can 
@@ -870,13 +319,24 @@ static int
 do_output_reply(struct fit_handle *hdl)
 {
     int ret;
-    ret = lwipif_output(hdl->ctx, hdl->local_port, hdl->remote_node, hdl->remote_port,
-        FIT_MSG_REPLY, &hdl->id, hdl->recvcall.out_addr, hdl->recvcall.out_len);
-    hdl->errno = ret;
-    /* Notify the client of the reply sending */
-    up(&hdl->sem);
-    fit_info("Out Reply [%d:%d](%d) errno=%d\n", hdl->remote_node, hdl->ctx->id, hdl->id.sequence_num, ret);
-    return ret;
+    ctx_t *ctx = hdl->ctx;
+
+    fit_node_t peer = hdl->remote_node;
+    struct fit_conn *conn = &ctx->conns[peer];
+
+    hdl->errno = 0;
+    ret = conn_send(conn, &hdl->id, FIT_MSG_REPLY, hdl->local_port,
+        hdl->remote_node, hdl->remote_port, hdl->recvcall.out_addr,
+        hdl->recvcall.out_len, &hdl->sem, &hdl->errno);
+
+    if (ret) {
+        hdl->errno = ret;
+        up(&hdl->sem); /* Notify the client of the failure */
+    }
+
+    /* We shoud not notify the client until the sent calback is called */
+    // fit_info("Out Reply [%d:%d](%d) errno=%d\n", hdl->remote_node, hdl->ctx->id, hdl->id.sequence_num, ret);
+    return 0;
 }
 
 /**
@@ -928,13 +388,17 @@ static void
 poll_lwip(void)
 {
     unsigned long jif = jiffies;
-    if (time_after(jif, FPC->next_jif_etharp)) {
-        FPC->next_jif_etharp = jif + msecs_to_jiffies(ARP_TMR_INTERVAL_MS);
+    if (time_after(jif, FPC->next_jif.etharp)) {
+        FPC->next_jif.etharp = jif + ARP_TMR_INTERVAL_JIF;
         etharp_tmr();
     }
-    if (time_after(jif, FPC->next_jif_ipreass)) {
-        FPC->next_jif_ipreass = jif + msecs_to_jiffies(IP_TMR_INTERVAL_MS);
+    if (time_after(jif, FPC->next_jif.ipreass)) {
+        FPC->next_jif.ipreass = jif + IP_TMR_INTERVAL_JIF;
         ip_reass_tmr();
+    }
+    if (time_after(jif, FPC->next_jif.tcp)) {
+        FPC->next_jif.tcp = jif + TCP_TMR_INTERVAL_JIF;
+        tcp_tmr();
     }
 }
 
@@ -972,12 +436,13 @@ handle_input_call(ctx_t *ctx, fit_node_t node, fit_port_t port,
     {
         void *buf;
         int chain = pbuf->tot_len > pbuf->len;
+        size_t tot_len = pbuf->tot_len - data_off;
         
         if (chain) {
             /* For compatability with thpool, we should malloc a continuous 
             buffer which is large enough. */
             buf = kmalloc(tot_len, GFP_KERNEL);
-            pbuf_copy_partial(pbuf, buf, pbuf->tot_len - data_off, data_off);
+            pbuf_copy_partial(pbuf, buf, tot_len, data_off);
         } else {
             buf = pbuf->payload + data_off;
         }
@@ -1061,12 +526,15 @@ handle_input(ctx_t *ctx, fit_node_t node, fit_port_t port,
 static unsigned long 
 __polling_sem_timeout_jif(void)
 {
-    unsigned long jif, etharp_diff, ipreass_diff;
+    unsigned long jif, etharp_diff, ipreass_diff, tcp_diff;
     const unsigned long min_diff = MIN_IINTERVAL_JIF;
     jif = jiffies;
-    etharp_diff = FPC->next_jif_etharp - jif;
-    ipreass_diff = FPC->next_jif_ipreass - jif;
+    etharp_diff = FPC->next_jif.etharp - jif;
+    ipreass_diff = FPC->next_jif.ipreass - jif;
+    tcp_diff = FPC->next_jif.tcp - jif;
+
     jif = etharp_diff < ipreass_diff ? etharp_diff : ipreass_diff;
+    jif = jif < tcp_diff ? jif : tcp_diff;
     if (jif > min_diff) {
         /* Could be caused by wraparound or already timedout */ 
         return 0;
@@ -1080,8 +548,9 @@ fit_polling_thread_fn(void *_arg)
     // if (pin_current_thread())
     //     fit_panic("Fail to pin FIT polling thread");
 
-    FPC->next_jif_etharp = jiffies + ARP_TMR_INTERVAL_JIF;
-    FPC->next_jif_ipreass = jiffies + IP_TMR_INTERVAL_JIF;
+    FPC->next_jif.etharp = jiffies + ARP_TMR_INTERVAL_JIF;
+    FPC->next_jif.ipreass = jiffies + IP_TMR_INTERVAL_JIF;
+    FPC->next_jif.tcp = jiffies + TCP_TMR_INTERVAL_JIF;
 
     while (1) {
         unsigned jif = __polling_sem_timeout_jif();
@@ -1135,7 +604,7 @@ fit_init(void)
 }
 
 ctx_t *
-fit_new_context(fit_node_t node_id, u16 udp_port)
+fit_new_context(fit_node_t node_id)
 {
     int ret;
     ctx_t *ctx;
@@ -1146,7 +615,7 @@ fit_new_context(fit_node_t node_id, u16 udp_port)
     }
     ctx = &FPC->ctxs[FPC->num_ctx];
 
-    ret = ctx_init(ctx, node_id, udp_port, handle_input);
+    ret = ctx_init(ctx, node_id, handle_input);
     if (ret)
         return NULL;
 
@@ -1203,7 +672,7 @@ fit_call(ctx_t *ctx, fit_node_t local_port, fit_node_t node,
        and wait on the semaphore. */
     sema_init(&h->sem, 0);
     ctx_enque_output(ctx, h);
-    __poke_polling_thread();
+    fit_poke_polling_thread();
     ret = down_interruptible(&h->sem);
     if (ret) {
         /* TODO: Manage resources when there is a interrupt, especially
@@ -1315,7 +784,7 @@ fit_reply(ctx_t *ctx, uintptr_t handle, void *msg, size_t len)
     hdl->errno = 0;
     sema_init(&hdl->sem, 0);
     ctx_enque_output(ctx, hdl);
-    __poke_polling_thread();
+    fit_poke_polling_thread();
     ret = down_interruptible(&hdl->sem);
     if (ret) {
         // TODO: Manage resources when there is a interrupt.

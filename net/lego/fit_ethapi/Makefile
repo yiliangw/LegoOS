@@ -1,1 +1,1 @@
-obj-y := fit_ethapi.o fit_internal.o fit_test.o
+obj-y := fit_api.o fit_conn.o fit_context.o fit_internal.o fit_utils.o
