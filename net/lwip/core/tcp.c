@@ -425,8 +425,8 @@ tcp_recved(struct tcp_pcb *pcb, u16_t len)
     tcp_ack_now(pcb);
   }
 
-  pr_debug("tcp_recved: recveived %u bytes, wnd %u (%u).\n",
-         len, pcb->rcv_wnd, TCP_WND - pcb->rcv_wnd);
+  LWIP_DEBUGF(TCP_INPUT_DEBUG, ("tcp_recved: recveived %u bytes, wnd %u (%u).\n",
+         len, pcb->rcv_wnd, TCP_WND - pcb->rcv_wnd));
 }
 
 /**
@@ -558,10 +558,10 @@ tcp_slowtmr(void)
 	prev = NULL;
 	pcb = tcp_active_pcbs;
 	if (pcb == NULL) {
-		pr_debug("tcp_slowtmr: no active pcbs\n");
+		LWIP_DEBUGF(TCP_DEBUG, ("tcp_slowtmr: no active pcbs\n"));
 	}
 	while (pcb != NULL) {
-		pr_debug("tcp_slowtmr: processing active pcb\n");
+		LWIP_DEBUGF(TCP_DEBUG, ("tcp_slowtmr: processing active pcb\n"));
 		LWIP_ASSERT("tcp_slowtmr: active pcb->state != CLOSED\n", pcb->state != CLOSED);
 		LWIP_ASSERT("tcp_slowtmr: active pcb->state != LISTEN\n", pcb->state != LISTEN);
 		LWIP_ASSERT("tcp_slowtmr: active pcb->state != TIME-WAIT\n", pcb->state != TIME_WAIT);
@@ -570,11 +570,11 @@ tcp_slowtmr(void)
 
 		if (pcb->state == SYN_SENT && pcb->nrtx == TCP_SYNMAXRTX) {
 			++pcb_remove;
-			pr_debug("tcp_slowtmr: max SYN retries reached\n");
+			LWIP_DEBUGF(TCP_DEBUG, ("tcp_slowtmr: max SYN retries reached\n"));
 		}
 		else if (pcb->nrtx == TCP_MAXRTX) {
 			++pcb_remove;
-			pr_debug("tcp_slowtmr: max DATA retries reached\n");
+			LWIP_DEBUGF(TCP_DEBUG, ("tcp_slowtmr: max DATA retries reached\n"));
 		} else {
 			if (pcb->persist_backoff > 0) {
 				/* If snd_wnd is zero, use persist timer to send 1 byte probes
@@ -720,7 +720,7 @@ tcp_slowtmr(void)
 			++pcb->polltmr;
 			if (pcb->polltmr >= pcb->pollinterval) {
 				pcb->polltmr = 0;
-				pr_debug("tcp_slowtmr: polling application\n");
+				LWIP_DEBUGF(TCP_DEBUG, ("tcp_slowtmr: polling application\n"));
 				TCP_EVENT_POLL(pcb, err);
 				if (err == ERR_OK) {
 					tcp_output(pcb);
