@@ -11,9 +11,10 @@ struct fit_context;
  */
 enum fit_conn_state {
     FIT_CONN_NONE = 0,
+    FIT_CONN_INITIALIZED, /* After the metadata has been initialized */
+    FIT_CONN_READY, /* After the connection has been setup  */
     FIT_CONN_ERR,
     FIT_CONN_CONNECTING,
-    FIT_CONN_READY,
 };
 
 /**
@@ -21,6 +22,9 @@ enum fit_conn_state {
  */
 struct fit_conn {
     struct fit_context *ctx;
+    /* For reconnecting */
+    struct ip_addr peer_addr;
+    u16_t peer_port, bind_port;
     struct tcp_pcb *tpcb;
     fit_node_t peer_id;
     int active; /* Whether to set up the connection actively */

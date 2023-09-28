@@ -1,6 +1,7 @@
 #include <lego/fit_ibapi.h>
 #include <net/lwip/init.h>
 #include "fit.h"
+#include "fit_context.h"
 #include "fit_internal.h"
 #include "fit_sys.h"
 
@@ -77,7 +78,10 @@ int __init lego_eth_init(void *unused)
     ret = fit_dispatch();
     if (ret)
         goto err;
-    
+
+    while (!ctx_ready(CTX));
+    /* Wait until the*/
+
     complete(&eth_fit_init_done);
 	return 0;
 err:

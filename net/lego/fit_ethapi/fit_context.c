@@ -87,6 +87,25 @@ ctx_init(ctx_t *ctx, fit_node_t node_id, fit_input_cb_t input)
     return 0;
 }
 
+/**
+ * Whether the context is ready to send and receive messages. 
+ */
+int
+ctx_ready(ctx_t *ctx)
+{
+    const fit_node_t me = ctx->id;
+    fit_node_t node;
+
+    for (node = 0; node < FIT_NUM_NODE; node++) {
+        struct fit_conn *conn;
+        if (node == me)
+            continue;
+        conn = &ctx->conns[node];
+        if (conn->state != FIT_CONN_READY)
+            return 0;
+    }
+    return 1;    
+}
 
 /**
  * Alloc a handle for the specified RPC ID. If rpcid is NULL, 

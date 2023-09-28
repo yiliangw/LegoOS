@@ -94,6 +94,7 @@ struct fit_context {
 typedef struct fit_context ctx_t;
 
 int ctx_init(ctx_t *ctx, fit_node_t node_id, fit_input_cb_t input);
+int ctx_ready(ctx_t *ctx);
 struct fit_handle *ctx_alloc_handle(ctx_t *ctx, struct fit_rpc_id *rpcid,
     int alloc_seqnum);
 struct fit_handle *ctx_find_handle(ctx_t *ctx, struct fit_rpc_id *rpcid);

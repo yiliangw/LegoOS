@@ -9,7 +9,9 @@
 #include "fit_conn.h"
 
 
-static void conn_input(struct fit_conn *conn, struct pbuf *p);
+static void __do_input(struct fit_conn *conn, struct pbuf *p);
+static int __do_connect(struct fit_conn *conn);
+
 
 /**
  * Try to write as much as possible the current send message to the 
@@ -43,7 +45,7 @@ __do_send(struct fit_conn *conn)
         BUG_ON(tcp_sndbuf(conn->tpcb) < hdr_len);
         /* This should not happen because there is no concurrent send */
         err = tcp_write(tpcb, &conn->send.hdr, hdr_len, 
-            TCP_WRITE_FLAG_COPY | TCP_WRITE_FLAG_MORE);
+            TCP_WRITE_FLAG_MORE);
         if (err) {
             fit_warn("tcp_write(): %d\n", err);
             return -ENOMEM;
@@ -53,14 +55,17 @@ __do_send(struct fit_conn *conn)
     /* Require to write the header as a whole */
     BUG_ON(conn->send.written_len < hdr_len);
 
-    sndbuf_len = tcp_sndbuf(tpcb);
-    write_len = conn->send.hdr.length - conn->send.written_len;
-    write_len = sndbuf_len < write_len ? sndbuf_len : write_len;
+    while (conn->send.hdr.length > conn->send.written_len) {
+        sndbuf_len = tcp_sndbuf(tpcb);
+        write_len = conn->send.hdr.length - conn->send.written_len;
+        write_len = sndbuf_len < write_len ? sndbuf_len : write_len;
 
-    if (write_len) {
+        if (!write_len)
+            return -EAGAIN;
+
         write_off = conn->send.written_len - hdr_len;
         err = tcp_write(tpcb, conn->send.msg + write_off, write_len, 
-            TCP_WRITE_FLAG_COPY | TCP_WRITE_FLAG_MORE);
+            TCP_WRITE_FLAG_MORE);
         if (err) {
             fit_warn("tcp_write(): %d\n", err);
             return -ENOMEM;
@@ -68,22 +73,31 @@ __do_send(struct fit_conn *conn)
         conn->send.written_len += write_len;
         err = tcp_output(tpcb);
         if (err != ERR_OK) {
-            fit_panic("tcp_output(): %d\n", err);
+            fit_warn("tcp_output(): %d\n", err);
             return -EAGAIN;
         }
     }
-    
-    if (conn->send.written_len < conn->send.hdr.length)
-        return -EAGAIN; /* We haven't written all data */
 
+    err = tcp_output(tpcb);
+    if (err != ERR_OK) {
+        fit_warn("tcp_output() 2: %d\n", err);
+        return -EAGAIN;
+    }
+    
     return 0;
 }
 
 static void
 __tcp_connecting_err_cb(void *arg, err_t err)
 {
-    // TODO: Handle possible errors
-    fit_panic("Unhandled TCP connecting error: %d\n", err);
+    struct fit_conn *conn = (struct fit_conn *)arg;
+    int ret;
+
+    fit_warn("TCP error when connecting to %d: %d. Retrying.\n", conn->peer_id, err);
+    conn->state = FIT_CONN_INITIALIZED;
+    ret = __do_connect(conn);
+    if (ret)
+        fit_panic("Failed to do connect\n");
 }
 
 static void
@@ -150,7 +164,7 @@ __tcp_recv_cb(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
      * advance.
      */
     pbuf_len = p->tot_len;
-    conn_input(conn, p);
+    __do_input(conn, p);
     tcp_recved(tpcb, pbuf_len);
 
     return ERR_OK;
@@ -166,7 +180,7 @@ __tcp_poll_cb(void *arg, struct tcp_pcb *tpcb)
         conn->send.written_len < conn->send.hdr.length) {
         ret = __do_send(conn);
         if (ret != 0 || ret != -EAGAIN)
-            fit_err("__do_send(): %d\n", ret);
+            fit_warn("__do_send(): %d\n", ret);
     }
 
     return ERR_OK;
@@ -209,57 +223,72 @@ __tcp_accepted_cb(void *arg, struct tcp_pcb *newpcb, err_t err)
     return ERR_OK;
 }
 
-
-
-int
-conn_init(struct fit_conn *conn, ctx_t *ctx, u16_t bind_port, 
-    fit_node_t peer_id, struct ip_addr *peer_addr, u16_t peer_port, 
-    int active)
+static int
+__do_connect(struct fit_conn *conn)
 {
     struct tcp_pcb *tpcb;
     err_t err;
+
+    BUG_ON(conn->state != FIT_CONN_INITIALIZED);
 
     tpcb = tcp_new();
     if (tpcb == NULL) {
         fit_err("tcp_new()\n");
         return -ENOMEM;
     }
-    err = tcp_bind(tpcb, IP_ADDR_ANY, bind_port);
+    err = tcp_bind(tpcb, IP_ADDR_ANY, conn->bind_port);
     if (err != ERR_OK) {
         fit_err("tcp_bind(): %d\n", err);
         return -ENOMEM;
     }
-    
-    memset(conn, 0, sizeof(*conn));
-    conn->ctx = ctx;
-    conn->tpcb = tpcb;
-    conn->peer_id = peer_id;
-    conn->active = active;
-    conn->state = FIT_CONN_NONE;
 
-    if (active) {
+    if (conn->active) {
         tcp_arg(tpcb, conn);
         tcp_err(tpcb, __tcp_connecting_err_cb);
         tcp_recv(tpcb, __tcp_recv_cb);
         tcp_sent(tpcb, __tcp_sent_cb);
-        err = tcp_connect(tpcb, peer_addr, peer_port,
+        err = tcp_connect(tpcb, &conn->peer_addr, conn->peer_port,
             __tcp_connected_cb);
         if (err != ERR_OK) {
             fit_err("tcp_connect(): %d\n", err);
+            tcp_close(tpcb); /* Free the PCB */
             return -ENOMEM;
         }
     } else {
         tpcb = tcp_listen(tpcb);
-        conn->tpcb = tpcb;
-        if (err != ERR_OK) {
+        if (tpcb == NULL) {
             fit_err("tcp_listen: %d\n", err);
             return -ENOMEM;
         }
         tcp_accept(tpcb, __tcp_accepted_cb);
         tcp_arg(tpcb, conn);
     }
-
+    conn->tpcb = tpcb;
     conn->state = FIT_CONN_CONNECTING;
+
+    return 0;
+}
+
+int
+conn_init(struct fit_conn *conn, ctx_t *ctx, u16_t bind_port, 
+    fit_node_t peer_id, struct ip_addr *peer_addr, u16_t peer_port, 
+    int active)
+{
+    int ret;
+
+    memset(conn, 0, sizeof(*conn));
+    conn->ctx = ctx;
+    conn->peer_addr = *peer_addr;
+    conn->peer_port = peer_port;
+    conn->bind_port = bind_port;
+    conn->tpcb = NULL;
+    conn->peer_id = peer_id;
+    conn->active = active;
+    conn->state = FIT_CONN_INITIALIZED;
+
+    ret = __do_connect(conn);
+    if (ret)
+        fit_panic("Failed to do connect\n");
 
     return 0;
 }
@@ -309,12 +338,10 @@ conn_send(struct fit_conn *conn, struct fit_rpc_id *rpcid,
     conn->send.sem = send_sem;
     conn->send.err = send_err;
 
-    do {
-        ret = __do_send(conn);
-    } while (ret == -EAGAIN);
+    ret = __do_send(conn);
     
-    if (ret != 0) /* Retry in tcp_poll */
-        pr_info("__do_send(): %d\n", ret);
+    if (ret != 0 && ret != -EAGAIN) /* Retry in tcp_poll */
+        fit_warn("__do_send(): %d\n", ret);
     
     return ret;
 }
@@ -326,7 +353,7 @@ conn_send(struct fit_conn *conn, struct fit_rpc_id *rpcid,
  * This function should be from the TCP recv callback.
  */
 static void
-conn_input(struct fit_conn *conn, struct pbuf *p)
+__do_input(struct fit_conn *conn, struct pbuf *p)
 {
     int ret;
     ctx_t *ctx = conn->ctx;
