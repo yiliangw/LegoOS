@@ -63,10 +63,16 @@ static int procmgmt(void *unused)
 	argv_init[7] = "1024";
 #endif
 
-#if 1
+#if 0
 	init_filename = "/bin/uname";
 	argv_init[0] = init_filename;
 	argv_init[1] = "-r";
+#endif
+
+#if 1
+	init_filename = "/usr/bin/python3";
+	argv_init[0] = init_filename;
+	argv_init[1] = "/tmp/guest/test.py";
 #endif
 
 	pr_info("====================\n");
