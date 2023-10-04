@@ -51,10 +51,7 @@ void *memcpy(void *dst, const void *src, size_t n);
 #define TCP_MSS			1460
 #define TCP_WND			24000
 #define TCP_SND_BUF		(16 * TCP_MSS)
-// lwip prints a warning if TCP_SND_QUEUELEN < (2 * TCP_SND_BUF/TCP_MSS), 
-// but 16 is faster.. 
-#define TCP_SND_QUEUELEN	(2 * TCP_SND_BUF/TCP_MSS)
-// #define TCP_SND_QUEUELEN	16
+#define TCP_SND_QUEUELEN	(4 * TCP_SND_BUF/TCP_MSS)
 
 // Print error messages when we run out of memory
 #define LWIP_DEBUG	1
