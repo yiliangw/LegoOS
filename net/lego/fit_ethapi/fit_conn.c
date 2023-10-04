@@ -66,9 +66,14 @@ __do_send(struct fit_conn *conn)
         write_off = conn->send.written_len - hdr_len;
         err = tcp_write(tpcb, conn->send.msg + write_off, write_len, 
             TCP_WRITE_FLAG_MORE);
-        if (err) {
-            fit_warn("tcp_write(): %d\n", err);
-            return -ENOMEM;
+        if (err != ERR_OK) {
+            if (err == ERR_MEM) {
+                fit_warn("tcp_write() ERR_MEM\n");
+                return -EAGAIN;
+            } else {
+                fit_warn("tcp_write(): %d\n", err);
+                return -ENOMEM;
+            }
         }
         conn->send.written_len += write_len;
         err = tcp_output(tpcb);
@@ -179,7 +184,7 @@ __tcp_poll_cb(void *arg, struct tcp_pcb *tpcb)
     if (conn->send.ongoing && 
         conn->send.written_len < conn->send.hdr.length) {
         ret = __do_send(conn);
-        if (ret != 0 || ret != -EAGAIN)
+        if (ret != 0 && ret != -EAGAIN)
             fit_warn("__do_send(): %d\n", ret);
     }
 
@@ -316,7 +321,7 @@ conn_send(struct fit_conn *conn, struct fit_rpc_id *rpcid,
         return -EPERM;
     }
     if (conn->send.ongoing) {
-        fit_warn("There an ongoing send\n");
+        fit_warn("There is an ongoing send\n");
         return -EBUSY;
     }
 
@@ -342,6 +347,9 @@ conn_send(struct fit_conn *conn, struct fit_rpc_id *rpcid,
     
     if (ret != 0 && ret != -EAGAIN) /* Retry in tcp_poll */
         fit_warn("__do_send(): %d\n", ret);
+
+    if (ret == -EAGAIN)
+        return 0;
     
     return ret;
 }
