@@ -32,7 +32,7 @@ static ssize_t stdio_file_write(struct file *f, const char __user *buf,
 	char *kbuf;
 	long ret;
 
-	kbuf = kmalloc(count, GFP_KERNEL);
+	kbuf = kmalloc(count+1, GFP_KERNEL);
 	if (!kbuf)
 		return -ENOMEM;
 
@@ -40,6 +40,7 @@ static ssize_t stdio_file_write(struct file *f, const char __user *buf,
 		ret = -EFAULT;
 		goto out;
 	}
+	kbuf[count] = '\0'; /* Ensure that the string terminates */
 
 	pr_info("STDOUT: ---[\n%s\n]---\n", kbuf);
 	ret = count;
