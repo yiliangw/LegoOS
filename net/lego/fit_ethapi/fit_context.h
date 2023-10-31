@@ -101,6 +101,7 @@ struct fit_handle *ctx_find_handle(ctx_t *ctx, struct fit_rpc_id *rpcid);
 int ctx_free_handle(ctx_t *ctx, struct fit_handle *handle);
 int ctx_enque_input(ctx_t *ctx, struct fit_handle *handle);
 int ctx_enque_output(ctx_t *ctx, struct fit_handle *handle);
+int ctx_enque_output_list(ctx_t *ctx, struct list_head *head);
 int ctx_deque_input(ctx_t *ctx, struct fit_handle **phandle);
 void ctx_deque_all_output(ctx_t *ctx, struct list_head *head);
 

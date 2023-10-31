@@ -13,6 +13,10 @@
 #include <net/lwip/ip_frag.h>
 #include <net/lwip/pbuf.h>
 
+#ifndef _LEGO_LINUX_MODULE_
+#include <lego/comp_common.h>
+#endif
+
 #include "fit_internal.h"
 
 const char e1000_netif_name[] = "en";
@@ -298,20 +302,12 @@ do_output_call(struct fit_handle *hdl)
     fit_node_t peer = hdl->remote_node;
     struct fit_conn *conn = &ctx->conns[peer];
 
-    hdl->errno = 0;
     ret = conn_send(conn, &hdl->id, FIT_MSG_CALL, hdl->local_port,
         hdl->remote_node, hdl->remote_port, hdl->call.out_addr,
         hdl->call.out_len, NULL, NULL);
 
-    if (ret) {
-        hdl->errno = ret;
-        up(&hdl->sem); /* Notify the client of the failure */
-    }
+    fit_info("Out Call [%d:%d](%d) errno=%d\n", hdl->ctx->id, peer, hdl->id.sequence_num, ret);
 
-    /* Else, we should notify the client after the reception of the reply
-       or timeout */
-    /* TODO: Add timeout mechanism for call. For simplicity, we can 
-       start the counting after the polling thread doing the call */
     return ret;
 }
 
@@ -324,18 +320,11 @@ do_output_reply(struct fit_handle *hdl)
     fit_node_t peer = hdl->remote_node;
     struct fit_conn *conn = &ctx->conns[peer];
 
-    hdl->errno = 0;
     ret = conn_send(conn, &hdl->id, FIT_MSG_REPLY, hdl->local_port,
         hdl->remote_node, hdl->remote_port, hdl->recvcall.out_addr,
         hdl->recvcall.out_len, &hdl->sem, &hdl->errno);
 
-    if (ret) {
-        hdl->errno = ret;
-        up(&hdl->sem); /* Notify the client of the failure */
-    }
-
-    /* We shoud not notify the client until the sent calback is called */
-    // fit_info("Out Reply [%d:%d](%d) errno=%d\n", hdl->remote_node, hdl->ctx->id, hdl->id.sequence_num, ret);
+    fit_info("Out Reply [%d:%d](%d) errno=%d\n", hdl->remote_node, hdl->ctx->id, hdl->id.sequence_num, ret);
     return 0;
 }
 
@@ -353,17 +342,30 @@ poll_pending_output(void)
     for (i = 0; i < FPC->num_ctx; i++) {
         /* For each context */
         ctx_t *ctx;
-        struct list_head outq;
-        struct fit_handle *hdl;
+        struct list_head outq, busyq;
+        struct fit_handle *hdl, *prev_busy_hdl;
+
+        INIT_LIST_HEAD(&busyq);
+        prev_busy_hdl = NULL;
 
         ctx = &FPC->ctxs[i];
         INIT_LIST_HEAD(&outq);
         ctx_deque_all_output(ctx, &outq);
         list_for_each_entry(hdl, &outq, qnode) {
+            if (prev_busy_hdl) { /* We delay this becuase of list_for_each_entry() */
+                /* outq is never used after this function, so we don't need to delete
+                the entry from it. */
+                list_add_tail(&prev_busy_hdl->qnode, &busyq);
+                prev_busy_hdl = NULL;
+            }
+
+            hdl->errno = 0;
             /* For each message */
             switch(hdl->type) {
                 case FIT_HANDLE_CALL:
                     ret = do_output_call(hdl);
+                    /* TODO: Add timeout mechanism for call. For simplicity, we can 
+                        start the counting after the polling thread doing the call */
                     break;
                 case FIT_HANDLE_RECV_CALL:
                     ret = do_output_reply(hdl);
@@ -373,9 +375,28 @@ poll_pending_output(void)
                     ret = -EINVAL;
                     fit_panic("Output for handle type %d not implemented.\n", hdl->type);
             }
-            if (ret)
-                fit_warn("Output failed: %d\n", ret);
-        }                
+
+            if (ret) { /* It is better to manage the failures here because of the list iteration. */
+                switch(-ret) {
+                    case EBUSY:
+                        prev_busy_hdl = hdl;
+                        fit_warn("conn busy\n");
+                        break;
+                    default:
+                        fit_warn("Output failed: %d\n", ret);
+                        hdl->errno = ret;
+                        up(&hdl->sem); /* Notify the client of the failure */
+                }
+            }
+            /* Else, We shoud not notify the client at least until the sent calback is called */
+        }
+        if (prev_busy_hdl) /* The last one may also return EBUSY */
+            list_add_tail(&prev_busy_hdl->qnode, &busyq);
+
+        if (!list_empty(&busyq)) {
+            ctx_enque_output_list(ctx, &busyq);
+            fit_poke_polling_thread();
+        }
     }
 }
 
@@ -465,8 +486,9 @@ handle_input_reply(ctx_t *ctx, fit_node_t node, fit_port_t port,
     struct pbuf *pbuf, off_t data_off)
 {
     struct fit_handle *hdl;
+    unsigned seqnum = rpc_id->sequence_num;
 
-    fit_info("In Reply [%d:%d](%d)\n", ctx->id, node, rpc_id->sequence_num);
+    fit_info("In Reply [%d:%d](%d)\n", ctx->id, node, seqnum);
 
     hdl = ctx_find_handle(ctx, rpc_id);
     if (hdl == NULL) {
@@ -545,20 +567,22 @@ __polling_sem_timeout_jif(void)
 static int
 fit_polling_thread_fn(void *_arg)
 {
-    // if (pin_current_thread())
-    //     fit_panic("Fail to pin FIT polling thread");
+#ifndef _LEGO_LINUX_MODULE_
+    if (pin_current_thread())
+        fit_panic("Fail to pin FIT polling thread");
+#endif
 
     FPC->next_jif.etharp = jiffies + ARP_TMR_INTERVAL_JIF;
     FPC->next_jif.ipreass = jiffies + IP_TMR_INTERVAL_JIF;
     FPC->next_jif.tcp = jiffies + TCP_TMR_INTERVAL_JIF;
 
     while (1) {
-        unsigned jif = __polling_sem_timeout_jif();
-        if (jif)
-            down_timeout(&FPC->polling_sem, jif);
+        // unsigned jif = __polling_sem_timeout_jif();
+        // if (jif)
+            // down_timeout(&FPC->polling_sem, jif);
         /* Consume the semahphore to 0 before polling the messages so that
           we will not miss any new notification. */
-        while(down_trylock(&FPC->polling_sem) == 0);
+        // while(down_trylock(&FPC->polling_sem) == 0);
         
         consume_free_pbuf();
         poll_lwip();

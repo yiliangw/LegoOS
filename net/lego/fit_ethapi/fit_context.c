@@ -206,6 +206,15 @@ ctx_enque_output(ctx_t *ctx, struct fit_handle *handle)
 }
 
 int
+ctx_enque_output_list(ctx_t *ctx, struct list_head *head)
+{
+    spin_lock(&ctx->output_q_lock);
+    list_splice_tail_init(head, &ctx->output_q);
+    spin_unlock(&ctx->output_q_lock);
+    return 0;
+}
+
+int
 ctx_deque_input(ctx_t *ctx, struct fit_handle **phandle)
 {
     struct fit_handle *hdl;
