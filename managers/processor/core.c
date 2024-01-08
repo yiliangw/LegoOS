@@ -16,6 +16,8 @@
 #include <lego/kthread.h>
 #include <lego/syscalls.h>
 #include <lego/profile.h>
+#include <lego/init.h>
+#include <lego/string.h>
 #include <processor/zerofill.h>
 #include <processor/processor.h>
 #include <processor/distvm.h>
@@ -42,6 +44,46 @@ const char *envp_init[MAX_INIT_ENVS+2] =
 	NULL,
 };
 
+static int inline myisspace(char c)
+{
+	return c <= ' ';
+}
+
+static int __init parse_initcmd_opt(char *str)
+{
+	char *ptr;
+	int arg_cnt, i;
+	size_t len = strlen(str);
+
+	/* Skip leading spaces */
+	for (ptr = str; *ptr && myisspace(*ptr); ptr++);
+	for (arg_cnt = 0; *ptr && arg_cnt < MAX_INIT_ARGS + 1; arg_cnt++) {
+		argv_init[arg_cnt] = ptr;
+		while (*ptr && !myisspace(*ptr))
+			ptr++;
+		while (*ptr && myisspace(*ptr)) {
+			*ptr = '\0';
+			ptr++;
+		}
+	}
+
+	/* If there is something left, it means that there are too many arguments. */
+	if (*ptr)
+		goto err;
+
+	for (i = 0; i < arg_cnt; i++)
+		pr_info("argv_init[%d]: %s\n", i, argv_init[i]);
+
+	return 0;
+
+err:
+	pr_err("Invalid initcmd option: %s\n", str);
+	argv_init[0] = NULL;
+	return -EINVAL;
+}
+
+__setup("initcmd", parse_initcmd_opt);
+
 static int procmgmt(void *unused)
 {
 	const char *init_filename;
@@ -51,33 +93,12 @@ static int procmgmt(void *unused)
 	 * Use the correct name if a real storage node is used.
 	 * If CONFIG_USE_RAMFS is set, then filename does not matter anyway.
 	 */
-#if 0
-	init_filename = "/usr/bin/python";
-	argv_init[0] = init_filename;
-	argv_init[1] = "/root/ys/models-1.4.0/official/resnet/imagenet_main.py";
-	argv_init[2] = "--data_dir";
-	argv_init[3] = "/mnt/ssd/imagenet/raw-data/tmp/";
-	argv_init[4] = "--model_dir";
-	argv_init[5] = "/tmp/lego_imagenet_model";
-	argv_init[6] = "--batch_size";
-	argv_init[7] = "1024";
-#endif
-
-#if 0
-	init_filename = "/bin/uname";
-	argv_init[0] = init_filename;
-	argv_init[1] = "-r";
-#endif
-
-#if 1
-	init_filename = "/usr/bin/python3";
-	argv_init[0] = init_filename;
-	argv_init[1] = "/tmp/guest/test.py";
-#endif
-
-	pr_info("====================\n");
-	pr_info("init_filename: %s\n", init_filename);
-	pr_info("====================\n");
+	init_filename = argv_init[0];
+	if (!init_filename) {
+		pr_err("No valid initcmd specified, halt.");
+		while (1)
+			hlt();
+	}
 
 	/*
 	 * If vNode is configured, which implies GPM is also configured,
